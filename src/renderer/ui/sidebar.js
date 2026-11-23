@@ -56,9 +56,9 @@ const STATUS = {
 }
 
 async function markAllRead() {
-  for (const c of state.channels.filter((x) => x.type === 'text')) {
-    const last = (await window.humble.history(c.id, { limit: 1 }))[0]
-    if (last) markRead(c.id, last.ts)
+  for (const id of [...state.channels.filter((x) => x.type === 'text').map((x) => x.id), ...[...state.dms.keys()].map((p) => 'dm:' + p)]) {
+    const last = (await window.humble.history(id, { limit: 1 }))[0]
+    if (last) markRead(id, last.ts)
   }
   state.unread.clear()
   state.mentions.clear()

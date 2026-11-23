@@ -191,6 +191,12 @@ test('vistas previas: solo las añade el autor del mensaje, y solo con http(s)',
   await waitFor(() => b.history('general')[0].emb, 5000, 'B ve la vista previa')
   assert.deepEqual(b.history('general')[0].emb, { url: 'https://ejemplo.com/x', title: 'Ejemplo', desc: 'Una página', site: 'ejemplo.com' })
   assert.throws(() => a.embed(idOf(m), { url: 'javascript:alert(1)', title: 'x' }), /inválido/i)
+  // si el mensaje se edita y ya no contiene el enlace, la vista previa deja de mostrarse
+  a.edit(idOf(m), 'ya no hay enlace')
+  await waitFor(() => b.history('general')[0].edited, 5000, 'B ve la edición')
+  assert.equal(b.history('general')[0].emb, undefined)
+  a.edit(idOf(m), 'otra vez https://ejemplo.com/x')
+  await waitFor(() => b.history('general')[0].emb, 5000, 'vuelve la vista previa')
   // un evento ajeno firmado por otro autor sobre mi mensaje se descarta al insertarlo
   const kp = DHT.keyPair()
   const evil = { a: kp.publicKey.toString('hex'), n: 1, ts: Date.now(), t: 'emb', x: idOf(m), url: 'https://malo.example/', title: 'phishing', desc: '', site: '' }

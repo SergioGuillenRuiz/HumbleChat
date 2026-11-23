@@ -9,6 +9,7 @@ const http = require('http')
 const crypto = require('crypto')
 const { startNet, launch, sleep, waitFor } = require('./lib')
 const { file: WAV } = require('./make-wav')
+const { execSync } = require('child_process')
 const { formatCode, fingerprint } = require('../src/core/groupkey')
 
 const only = process.argv[2]
@@ -188,8 +189,148 @@ async function content() {
   }
 }
 
+
+const hears = (p, who) => p.page.locator(`.vuser:has-text("${who}").speaking`).count().then((n) => n > 0)
+const joinVoice = (ps) => everyone(ps, (p) => p.page.locator('.vch .ch', { hasText: 'General' }).click())
+const evalApp = (p, fn, arg) => p.page.evaluate(fn, arg)
+
+async function sistema() {
+  const net = await startNet()
+  const apps = []
+  const mk = async (name, o = {}) => { const p = await launch(net, name, o); apps.push(p); return p }
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  try {
+    console.log('Sala, código y avisos de versión')
+    const web = http.createServer((_q, r) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify({ tag_name: 'v9.9.9', html_url: 'http://localhost/descarga' })) })
+    await new Promise((r) => web.listen(0, '127.0.0.1', r))
+    const a = await mk('Ana', { env: { HUMBLECHAT_UPDATE_URL: `http://127.0.0.1:${web.address().port}/`, HUMBLECHAT_UPDATE_DELAY: '500' } })
+    const b = await mk('Beto', { noKey: true, ready: '.setup' })
+    await b.page.fill('#code', 'esto no vale'); await b.page.click('#join')
+    await waitFor(async () => /no es válido/.test(await b.page.textContent('#error')), 5000, 'error de código')
+    ok('sin llave arranca en la pantalla de bienvenida y rechaza un código inválido con un mensaje claro')
+    await b.page.fill('#code', formatCode(net.key).toUpperCase()); await b.page.click('#join')
+    await b.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await count(a, '.member:not(.offline)')) === 2, 25000, 'se ven tras unirse')
+    ok('Beto entra pegando el código (en mayúsculas y con guiones) y se encuentra con Ana')
+    await a.page.waitForSelector('.update-bar', { timeout: 15000 })
+    if (!/9\.9\.9/.test(await a.page.textContent('.update-bar'))) throw new Error('el aviso no menciona la versión')
+    ok('Ana ve el aviso de la versión 9.9.9 publicada')
+    await b.page.locator('.up-btns .icon-btn').last().click()
+    await b.page.locator('.st-item', { hasText: 'Sala' }).click()
+    await b.page.waitForSelector('.fp')
+    if ((await b.page.textContent('.fp')).replace(/\s/g, '') !== fingerprint(net.key).replace(/\s/g, '')) throw new Error('huella distinta')
+    ok('la huella de la sala coincide en los dos equipos')
+    await b.page.locator('.btn', { hasText: 'Crear una sala nueva' }).click()
+    await b.page.locator('.modal .btn.brand').click()
+    await b.page.waitForSelector('.modal .code-box code')
+    await b.page.locator('.modal .btn.green').click()
+    await b.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await count(a, '.member.offline')) === 1, 30000, 'A ya no ve a B')
+    ok('rotación de llave: con la sala nueva, Ana y Beto dejan de verse')
+    web.close()
+    await close()
+
+    console.log('Audio: supresión de ruido, umbral y pulsar para hablar')
+    const env = { HUMBLECHAT_FAKE_AUDIO_FILE: path.join(__dirname, 'speech.wav') }
+    const n2 = await startNet()
+    const x = await launch(n2, 'Ana', { env }); const y = await launch(n2, 'Beto', { env }); apps.push(x, y)
+    await waitFor(async () => (await count(y, '.member:not(.offline)')) === 2, 25000, 'se ven')
+    await joinVoice([x, y])
+    await waitFor(() => hears(y, 'Ana'), 40000, 'Beto oye a Ana')
+    ok('con la supresión estándar, Beto oye a Ana')
+    const mod = (p, what, arg) => p.page.evaluate(async ({ what, arg }) => {
+      const { state } = await import('/state.js'); const { voice } = await import('/voice.js')
+      if (what === 'denoise') { state.prefs.denoise = arg; await voice.applyDevices() }
+      if (what === 'gate') state.prefs.gate = arg
+      if (what === 'ptt') state.prefs.ptt = { on: true, key: { code: arg.code, hook: arg.hook, label: 'F9' } }
+      if (what === 'ptt-global') { state.prefs.ptt = { on: true, key: { code: null, hook: arg, label: 'F9' } }; await window.humble.pttConfigure({ on: true, hook: arg }) }
+    }, { what, arg })
+    await mod(x, 'denoise', 'advanced')
+    await sleep(3000)
+    if ((await x.page.locator('.toast.warn').allTextContents()).some((t) => /avanzada/.test(t))) throw new Error('la supresión avanzada avisó de un fallo')
+    await waitFor(() => hears(y, 'Ana'), 20000, 'Beto oye a Ana con RNNoise')
+    ok('con la supresión avanzada (RNNoise en WebAssembly sobre el micrófono real) Beto sigue oyendo a Ana')
+    await mod(x, 'denoise', 'standard')
+    await mod(x, 'gate', { on: true, level: 0.9 })
+    await sleep(2500)
+    if (await hears(y, 'Ana')) throw new Error('con el umbral alto debería haber silencio')
+    await mod(x, 'gate', { on: true, level: 0.003 })
+    await waitFor(() => hears(y, 'Ana'), 15000, 'Beto oye a Ana con umbral bajo')
+    ok('umbral de sensibilidad: alto = silencio, bajo = se oye')
+    await mod(x, 'gate', { on: false, level: 0.05 })
+    await mod(x, 'ptt', { code: 'F9', hook: 67 })
+    await sleep(2500)
+    if (await hears(y, 'Ana')) throw new Error('sin pulsar la tecla debería haber silencio')
+    await x.page.keyboard.down('F9')
+    await waitFor(() => hears(y, 'Ana'), 15000, 'PTT en ventana')
+    await x.page.keyboard.up('F9')
+    await sleep(2500)
+    if (await hears(y, 'Ana')) throw new Error('al soltar la tecla debería volver el silencio')
+    ok('pulsar para hablar (tecla con la ventana enfocada): silencio, se oye mientras se pulsa, silencio al soltar')
+    let xdotool = false
+    try { execSync('xdotool version', { stdio: 'ignore' }); xdotool = process.platform === 'linux' } catch {}
+    if (xdotool) {
+      const { UiohookKey } = require('uiohook-napi')
+      await mod(x, 'ptt-global', UiohookKey.F9)
+      await sleep(1500)
+      if (await hears(y, 'Ana')) throw new Error('PTT global: debería haber silencio')
+      execSync('xdotool keydown F9')
+      await waitFor(() => hears(y, 'Ana'), 12000, 'PTT global')
+      execSync('xdotool keyup F9')
+      ok('pulsar para hablar con tecla GLOBAL (gancho del sistema): se oye al pulsar')
+    } else console.log('  - PTT global omitido (sin xdotool o fuera de Linux)')
+    await close()
+    await n2.testnet.destroy()
+
+    console.log('Voz sin conexión directa (relé por un tercero)')
+    const n3 = await startNet()
+    const [p1, p2, p3] = [await launch(n3, 'Ana', { env }), await launch(n3, 'Beto', { env }), await launch(n3, 'Carlos', { env })]
+    apps.push(p1, p2, p3)
+    for (const p of [p1, p2, p3]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 3, 25000, 'se ven')
+    const idOf = (p) => p.page.evaluate(() => window.humble.init().then((i) => i.me.id))
+    const [i1, i2] = [await idOf(p1), await idOf(p2)]
+    await p1.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ blockDirect: [v] })), i2)
+    await p2.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ blockDirect: [v] })), i1)
+    await joinVoice([p1, p2, p3])
+    await waitFor(() => hears(p2, 'Ana'), 90000, 'Beto oye a Ana por relé')
+    await waitFor(() => hears(p1, 'Beto'), 40000, 'Ana oye a Beto por relé')
+    ok('Ana y Beto, sin conexión directa entre ellos, se oyen a través de Carlos')
+    await close()
+    await n3.testnet.destroy()
+
+    console.log('Integración con el sistema: bandeja y audio al compartir pantalla')
+    const n4 = await startNet()
+    const t = await launch(n4, 'Ana', { env: { HUMBLECHAT_FORCE_TRAY: '1' } }); apps.push(t)
+    const hidden = await t.app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.close(); return { visible: w.isVisible(), destroyed: w.isDestroyed() } })
+    if (hidden.visible || hidden.destroyed) throw new Error('con bandeja, cerrar debe ocultar la ventana sin destruirla')
+    await t.app.evaluate(({ app }) => app.emit('second-instance'))
+    if (!(await t.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()))) throw new Error('la ventana no volvió a mostrarse')
+    ok('cerrar la ventana con bandeja la oculta (la app sigue viva) y abrir de nuevo la muestra')
+    await close()
+    const w = await launch(n4, 'Ana', { env: { HUMBLECHAT_FAKE_PLATFORM: 'win32' } }); const l = await launch(n4, 'Beto'); apps.push(w, l)
+    await waitFor(async () => (await count(l, '.member:not(.offline)')) === 2, 25000, 'se ven')
+    await joinVoice([w, l])
+    await waitFor(async () => (await count(w, '.vuser')) === 2, 10000, 'sala')
+    for (let i = 0; i < 4; i++) {
+      await w.page.locator('.round[aria-label="Compartir pantalla"]').click()
+      if (await w.page.locator('.src-card').first().waitFor({ timeout: 25000 }).then(() => true, () => false)) break
+      await w.page.keyboard.press('Escape')
+    }
+    if ((await count(w, '.chk')) !== 1) throw new Error('en Windows debería ofrecerse el audio del sistema')
+    await w.page.keyboard.press('Escape')
+    await l.page.locator('.round[aria-label="Compartir pantalla"]').click()
+    for (let i = 0; i < 4 && !(await count(l, '.src-card')); i++) await sleep(1500)
+    if ((await count(l, '.chk')) !== 0) throw new Error('fuera de Windows no debe ofrecerse el audio del sistema')
+    ok('la casilla "audio del sistema" aparece en Windows y no en Linux')
+  } finally {
+    for (const p of apps) await p.app.close().catch(() => {})
+    await net.testnet.destroy().catch(() => {})
+  }
+}
+
 ;(async () => {
   if (!only || only === 'contenido') await content()
+  if (!only || only === 'sistema') await sistema()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })

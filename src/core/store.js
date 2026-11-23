@@ -313,7 +313,7 @@ class Store {
     const pin = this.pins.get(id)
     if (pin?.on) { out.pinned = true; out.pinnedBy = pin.a }
     const emb = this.embeds.get(id)
-    if (emb) out.emb = { url: emb.url, title: emb.title, desc: emb.desc, site: emb.site }
+    if (emb && (ed?.text ?? ev.text).includes(emb.url)) out.emb = { url: emb.url, title: emb.title, desc: emb.desc, site: emb.site }
     if (ev.re) {
       const t = this.events.get(ev.re)
       out.reply = t && t.t === 'msg' && !this.deleted.has(ev.re)
