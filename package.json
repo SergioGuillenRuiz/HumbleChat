@@ -14,7 +14,8 @@
     "dist:win": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --win",
     "dist:linux": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux",
     "dist": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js",
-    "dist:all": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux AppImage pacman --win portable zip"
+    "dist:all": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux AppImage pacman --win portable zip",
+    "test:smoke": "node test/smoke.js"
   },
   "dependencies": {
     "hyperdht": "^6.21.0",
