@@ -32,4 +32,25 @@ const topicOf = (key) => crypto.createHmac('sha256', key).update('humblechat/top
 const proofOf = (key, handshakeHash) =>
   crypto.createHmac('sha256', key).update('humblechat/proof/v1').update(handshakeHash).digest('hex')
 
-module.exports = { findGroupKey, topicOf, proofOf }
+// ───────────── Código de sala: la llave en forma legible para compartirla ─────────────
+/** Llave nueva y aleatoria (256 bits). */
+const generateKey = () => crypto.randomBytes(32).toString('hex')
+
+/** "abcd1234-…" (8 grupos de 8). Si la llave no es de 64 hex (p. ej. una definida a mano) se muestra tal cual. */
+function formatCode(key) {
+  return /^[0-9a-f]{64}$/.test(key) ? key.match(/.{8}/g).join('-') : key
+}
+
+/** Acepta el código con guiones, espacios o mayúsculas; devuelve la llave o null si no es un código válido. */
+function parseCode(text) {
+  const hex = String(text || '').replace(/[\s-]+/g, '').toLowerCase()
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null
+}
+
+/** Huella corta de la sala: dos personas con la misma huella tienen la misma llave. */
+function fingerprint(key) {
+  const h = crypto.createHash('sha256').update('humblechat/fingerprint/v1').update(key).digest('hex')
+  return h.slice(0, 4) + '-' + h.slice(4, 8) + '-' + h.slice(8, 12)
+}
+
+module.exports = { findGroupKey, topicOf, proofOf, generateKey, formatCode, parseCode, fingerprint }

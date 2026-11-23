@@ -17,7 +17,7 @@ async function startNet() {
   return { testnet, bootstrap: `${b.host}:${b.port}`, key: crypto.randomBytes(32).toString('hex') }
 }
 
-async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile = null, env: extraEnv = {} } = {}) {
+async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile = null, env: extraEnv = {}, noKey = false, ready = '.sb-header' } = {}) {
   if (!profile) {
     profile = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-e2e-'))
     fs.mkdirSync(path.join(profile, 'data'), { recursive: true })
@@ -28,7 +28,8 @@ async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile
     NODE_OPTIONS: '',
     HUMBLECHAT_PROFILE: profile,
     ...(net.bootstrap ? { HUMBLECHAT_BOOTSTRAP: net.bootstrap } : {}),
-    ...(packaged ? {} : { HUMBLECHAT_KEY: net.key }), // empaquetada: usa la group.key incluida
+    ...(packaged || noKey ? {} : { HUMBLECHAT_KEY: net.key }), // empaquetada: usa la group.key incluida
+    ...(noKey ? { HUMBLECHAT_NO_AUTOKEY: '1' } : {}),
     HUMBLECHAT_NO_SANDBOX: '1',
     ...(fakeMedia ? { HUMBLECHAT_FAKE_MEDIA: '1' } : {}),
     HUMBLECHAT_W: String(size[0]),
@@ -40,7 +41,7 @@ async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile
   await page.setViewportSize({ width: size[0], height: size[1] }).catch(() => {})
   page.on('pageerror', (e) => console.log(`[${name}] pageerror:`, e.message))
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log(`[${name}] console.${m.type()}:`, m.text()) })
-  await page.waitForSelector('.sb-header', { timeout: 20000 })
+  await page.waitForSelector(ready, { timeout: 20000 })
   return { app, page, name, profile }
 }
 

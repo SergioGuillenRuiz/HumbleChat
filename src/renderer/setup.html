@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>HumbleChat</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="setup">
+    <div class="setup-logo">H</div>
+    <h1>Te damos la bienvenida a HumbleChat</h1>
+    <p class="muted">Para entrar en la sala de tus amigos necesitas el <b>código de sala</b>. Pídeselo a quien montó la aplicación y pégalo aquí. Solo hace falta la primera vez.</p>
+    <input id="code" class="text" placeholder="Pega aquí el código de sala" spellcheck="false" autocomplete="off" autofocus>
+    <div id="error" class="setup-error"></div>
+    <button id="join" class="btn brand big">Entrar</button>
+    <div class="setup-sep"></div>
+    <p class="muted">¿Eres el primero del grupo? <a id="create" class="link">Crear una sala nueva</a></p>
+    <div id="created" class="setup-created hidden">
+      <p class="muted">Este es el código de tu sala nueva. Pásaselo a tus amigos para que puedan entrar:</p>
+      <code id="newcode" class="inline"></code>
+      <div class="row"><button id="copy" class="btn secondary">Copiar código</button><button id="go" class="btn green">Entrar a mi sala</button></div>
+    </div>
+  </main>
+  <script type="module" src="setup.js"></script>
+</body>
+</html>

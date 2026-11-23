@@ -139,13 +139,15 @@ export function openVolumeMenu(x, y, id, voice) {
 export async function openInvite() {
   const { el, close } = layer('modal-bg')
   const d = await window.humble.diag().catch(() => ({ version: '' }))
+  const info = await window.humble.roomInfo().catch(() => ({ code: '' }))
   el.addEventListener('mousedown', (e) => { if (e.target === el) close() })
   const step = (n, title, text) => h('div.step', h('div.step-n', String(n)), h('div', h('b', title), h('p', text)))
   el.append(h('div.modal',
     h('div.modal-body', h('h2', 'Invitar a un amigo'),
       h('p.muted', 'No hay cuentas ni enlaces: tu amigo solo necesita la misma aplicación que tú.'),
-      step(1, 'Pásale la aplicación', 'El instalador (o el .zip / .AppImage / .pacman) que compilaste, por el medio que prefieras.'),
-      step(2, 'Que la abra', 'Ya está dentro: aparecerá en la lista de miembros en unos segundos, sin configurar nada.'),
+      step(1, 'Pásale la aplicación', 'El instalador o archivo que compilaste (ya trae la sala), o el de la página de descargas del proyecto.'),
+      step(2, 'Si no trae la sala, pásale el código', 'Al abrirla por primera vez te pide el código de sala: que lo pegue y listo.'),
+      h('div.code-box', h('code', info.code || '—'), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(info.code).then(() => toast('Código de sala copiado', 'ok')) }, 'Copiar')),
       step(3, 'Misma versión para todos', `Estás usando la ${d.version ? 'versión ' + d.version : 'versión actual'}. Si alguien no te ve, mira la barra lateral: avisa si es una versión distinta.`)),
     h('div.modal-foot', h('button.btn.brand', { onclick: close }, 'Entendido'))))
 }
@@ -188,7 +190,7 @@ export function openSettings(voice, startTab = 'account') {
 
   const nav = h('nav')
   const content = h('div.st-content')
-  const tabs = [['account', 'Mi cuenta'], ['voice', 'Voz y vídeo'], ['notif', 'Notificaciones'], ['diag', 'Diagnóstico'], ['about', 'Acerca de']]
+  const tabs = [['account', 'Mi cuenta'], ['room', 'Sala'], ['voice', 'Voz y vídeo'], ['notif', 'Notificaciones'], ['app', 'Aplicación'], ['diag', 'Diagnóstico'], ['about', 'Acerca de']]
 
   function render() {
     meterStop?.(); meterStop = null
@@ -196,7 +198,7 @@ export function openSettings(voice, startTab = 'account') {
       h('div.st-title', 'Ajustes de usuario'),
       ...tabs.map(([id, label]) => h('button.st-item' + (id === tab ? '.active' : ''), { onclick: () => { tab = id; render() } }, label))
     )
-    content.replaceChildren(({ account, voice: voiceTab, notif, diag, about })[tab]())
+    content.replaceChildren(({ account, room, voice: voiceTab, notif, app: appTab, diag, about })[tab]())
   }
 
   function account() {
@@ -341,6 +343,68 @@ export function openSettings(voice, startTab = 'account') {
     return h('div', h('h2', 'Diagnóstico'),
       h('p.muted', 'Estado de la red y de las llamadas, útil para saber por qué algo no va bien. No incluye IPs ni mensajes.'),
       box, h('div.row', copy))
+  }
+
+  // ── Sala: huella, código, cambiar de sala ──
+  function room() {
+    const box = h('div')
+    ;(async () => {
+      const info = await window.humble.roomInfo()
+      let shown = false
+      const code = h('code', '•'.repeat(32))
+      const toggle = h('button.btn.secondary.small', { onclick: () => { shown = !shown; code.textContent = shown ? info.code : '•'.repeat(32); toggle.textContent = shown ? 'Ocultar' : 'Mostrar' } }, 'Mostrar')
+      const copy = h('button.btn.brand.small', { onclick: () => navigator.clipboard.writeText(info.code).then(() => toast('Código de sala copiado', 'ok')) }, 'Copiar')
+      const input = h('input.text', { placeholder: 'Pega aquí otro código de sala', spellcheck: false })
+      const join = h('button.btn.brand', { onclick: () => changeRoom(input.value) }, 'Cambiar')
+      const locked = info.envKey ? h('p.muted', 'La sala está fijada por la variable HUMBLECHAT_KEY y no se puede cambiar desde aquí.') : null
+      box.replaceChildren(
+        h('h2', 'Sala'),
+        h('p.muted', 'La sala es el grupo de amigos al que te conectas. Quien tenga el código puede entrar.'),
+        h('div.field', h('div.label', 'Huella de la sala'), h('div.fp', info.fingerprint), h('p.muted', 'Si tus amigos ven la misma huella, estáis en la misma sala.')),
+        h('div.field', h('div.label', 'Código de sala'), h('div.code-box', code, toggle, copy), h('p.muted', 'Pásaselo solo a quien quieras que entre.')),
+        locked,
+        !info.envKey && h('label.field', 'Cambiar de sala', h('div.row', input, join)),
+        !info.envKey && h('div.field', h('button.btn.secondary', { onclick: createRoom }, 'Crear una sala nueva'),
+          h('p.muted', 'Útil si un amigo ya no debe entrar: con una sala nueva solo entran quienes reciban el código nuevo. Tu historial se conserva en este equipo.')))
+    })()
+    async function changeRoom(text) {
+      if (!text.trim()) return
+      const ok = await confirmModal({ title: 'Cambiar de sala', body: h('p', 'Dejarás de ver esta sala hasta que vuelvas a introducir su código. Tu historial se conserva en este equipo.'), confirm: 'Cambiar' })
+      if (!ok) return
+      try { await window.humble.roomJoin(text) } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'warn', 8000) }
+    }
+    async function createRoom() {
+      const ok = await confirmModal({ title: 'Crear una sala nueva', body: h('p', 'Se genera un código nuevo. Tus amigos tendrán que introducirlo para entrar; quien tenga el código antiguo se quedará fuera.'), confirm: 'Crear' })
+      if (!ok) return
+      const code = await window.humble.roomCreate()
+      const { el, close } = layer('modal-bg')
+      el.append(h('div.modal',
+        h('div.modal-body', h('h2', 'Tu sala nueva'), h('p.muted', 'Copia este código y pásaselo a tus amigos. Después pulsa «Entrar a la sala nueva».'),
+          h('div.code-box', h('code', code), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(code).then(() => toast('Código copiado', 'ok')) }, 'Copiar'))),
+        h('div.modal-foot', h('button.btn.link', { onclick: close }, 'Cancelar'),
+          h('button.btn.green', { onclick: () => window.humble.roomJoin(code).catch(() => toast('No se pudo cambiar de sala.', 'warn')) }, 'Entrar a la sala nueva'))))
+    }
+    return box
+  }
+
+  // ── Aplicación: bandeja, inicio, actualizaciones ──
+  function appTab() {
+    const sw = (label, help, key) => {
+      const on = () => state.settings[key]
+      const btn = h('button.switch' + (on() ? '.on' : ''), { role: 'switch', 'aria-checked': String(on()), onclick: async () => {
+        state.settings = await window.humble.setSettings({ [key]: !on() })
+        btn.classList.toggle('on', !!on())
+        btn.setAttribute('aria-checked', String(on()))
+      } }, h('span.knob'))
+      return h('div.sw-row', h('div', h('div.sw-label', label), h('div.muted', help)), btn)
+    }
+    return h('div', h('h2', 'Aplicación'),
+      sw('Seguir en la bandeja al cerrar la ventana', 'La aplicación (y tu llamada) sigue abierta; se sale desde el icono de la bandeja. Solo si tu escritorio tiene bandeja.', 'tray'),
+      sw('Iniciar con el sistema', 'Se abre sola al encender el ordenador, en segundo plano.', 'autostart'),
+      sw('Buscar actualizaciones', 'Avisa o instala las versiones nuevas. Solo consulta las publicaciones públicas del proyecto.', 'updates'),
+      sw('Vistas previas de enlaces', 'Al enviar un enlace, se añade su título e imagen para todos. Tu equipo visita la página una vez.', 'linkPreviews'),
+      h('div.sw-row', h('div', h('div.sw-label', 'Versión ' + state.version), h('div.muted', 'Comprueba si hay una versión nueva ahora mismo.')),
+        h('button.btn.secondary.small', { onclick: () => { window.humble.updateCheck(); toast('Buscando actualizaciones…') } }, 'Buscar ahora')))
   }
 
   function about() {

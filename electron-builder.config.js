@@ -93,3 +93,10 @@ module.exports = {
     "**/*.node"
   ]
 }
+
+// ── Ajustes que dependen del modo de compilación ──
+const cfg = module.exports
+// Compilación pública (HUMBLECHAT_PUBLIC=1): sin llave de sala dentro. Es la que se publica en GitHub; al abrirla
+// por primera vez la app pide el código de sala. Las actualizaciones nunca llevan llave (se conserva la del usuario).
+if (process.env.HUMBLECHAT_PUBLIC) cfg.extraResources = cfg.extraResources.filter((r) => r.from !== 'group.key')
+cfg.publish = [{ provider: 'github', owner: 'SergioGuillenRuiz', repo: 'HumbleChat', releaseType: 'release' }]

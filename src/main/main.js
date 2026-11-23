@@ -1,10 +1,13 @@
 'use strict'
-const { app, BrowserWindow, ipcMain, protocol, session, shell, desktopCapturer, powerMonitor, Notification, Menu, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, protocol, session, shell, desktopCapturer, powerMonitor, Notification, Menu, dialog, nativeImage } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const crypto = require('crypto')
+const os = require('os')
 const { ChatNode } = require('../core/node')
-const { findGroupKey } = require('../core/groupkey')
+const { findGroupKey, generateKey, formatCode, parseCode, fingerprint } = require('../core/groupkey')
+const { createSettings } = require('./settings')
+const { startUpdates } = require('./updates')
+const { trayHostAvailable, createTray } = require('./tray')
 const { loadNetwork } = require('../core/network')
 const { CHANNELS, SERVER_NAME, LIMITS } = require('../core/constants')
 
@@ -51,6 +54,13 @@ let node = null
 let rendererReady = false
 let quitting = false
 let pendingScreenId = null
+let settings = null
+let updates = null
+let tray = null
+let trayOk = false
+let trayNoticeShown = false
+let currentKey = null
+const START_HIDDEN = process.argv.includes('--hidden') || !!process.env.HUMBLECHAT_HIDDEN
 
 // getSources a veces devuelve una lista vacía de forma transitoria (equipos lentos, primer fotograma tardío).
 // En Wayland cada llamada abre el diálogo del portal del sistema: nunca se reintenta (si cancelas, cancelas).
@@ -72,37 +82,57 @@ const MIME = {
 }
 
 // ───────────── Llave del grupo y nodo P2P ─────────────
-function loadKey() {
+const userKeyFile = () => path.join(app.getPath('userData'), 'group.key')
+
+function saveKey(key) {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true })
+  fs.writeFileSync(userKeyFile(), key + '\n', { mode: 0o600 })
+}
+
+/**
+ * Llave de la sala: variable de entorno > datos del usuario > la que trae la aplicación (se copia a los datos
+ * del usuario, así sobrevive a las actualizaciones, que no la incluyen) > desarrollo: se crea una.
+ * Devuelve null si no hay ninguna: entonces se pide el código de sala al usuario.
+ */
+function resolveKey() {
   const found = findGroupKey({
     userDataDir: app.getPath('userData'),
     resourcesDir: app.isPackaged ? process.resourcesPath : null,
-    repoRoot: app.isPackaged ? null : ROOT
+    repoRoot: app.isPackaged || process.env.HUMBLECHAT_NO_AUTOKEY ? null : ROOT // NO_AUTOKEY: solo pruebas
   })
-  if (found) return found.key
-  if (!app.isPackaged) { // desarrollo: crear una al vuelo
-    const key = crypto.randomBytes(32).toString('hex')
+  if (found) {
+    if (found.source !== 'env' && found.source !== userKeyFile()) saveKey(found.key)
+    return found.key
+  }
+  if (!app.isPackaged && !process.env.HUMBLECHAT_NO_AUTOKEY) {
+    const key = generateKey()
     fs.writeFileSync(path.join(ROOT, 'group.key'), key + '\n', { mode: 0o600 })
+    saveKey(key)
     return key
   }
-  dialog.showErrorBox('HumbleChat', 'Esta copia de la app no incluye la llave del grupo (group.key). Pide a quien te la pasó una versión completa.')
-  app.exit(1)
+  return null
 }
 
 let network = null
 
-async function startNode() {
+function readNetwork() {
   network = loadNetwork({
     userDataDir: app.getPath('userData'),
     resourcesDir: app.isPackaged ? process.resourcesPath : null,
     repoRoot: app.isPackaged ? null : ROOT
   })
+}
+
+async function startNode(key) {
+  readNetwork()
+  currentKey = key
   let { bootstrap } = network
   let dhtOpts = {}
   if (process.env.HUMBLECHAT_BOOTSTRAP) { // solo pruebas: DHT local en vez de la pública
     bootstrap = [process.env.HUMBLECHAT_BOOTSTRAP]
     dhtOpts = { host: '127.0.0.1' }
   }
-  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: loadKey(), bootstrap, dhtOpts })
+  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts })
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
   let batch = []
   node.on('event', (ev) => {
@@ -150,7 +180,7 @@ function saveBounds() {
 
 let forceClose = false
 
-function createWindow() {
+function createWindow(page = 'index') {
   const saved = process.env.HUMBLECHAT_W ? {} : loadBounds()
   win = new BrowserWindow({
     width: Number(process.env.HUMBLECHAT_W) || saved.width || 1280,
@@ -175,22 +205,32 @@ function createWindow() {
   })
   win.once('ready-to-show', () => {
     if (saved.maximized) win.maximize()
-    if (!process.env.HUMBLECHAT_HIDDEN) win.show()
+    if (process.env.HUMBLECHAT_HIDDEN) return
+    if (!(START_HIDDEN && tray)) win.show()
   })
   let boundsTimer = null
   for (const evt of ['resize', 'move']) win.on(evt, () => { clearTimeout(boundsTimer); boundsTimer = setTimeout(saveBounds, 600) })
-  // Cerrar la ventana en plena llamada la cortaría: se pregunta antes (en Discord se minimiza a la bandeja).
+  // Cerrar la ventana: con bandeja disponible la aplicación sigue abierta (y la llamada, si la hay);
+  // sin ella, si estás en una llamada se pregunta antes de cortarla.
   win.on('close', (e) => {
     saveBounds()
-    if (forceClose || quitting || !node?.voice) return
+    if (forceClose || quitting) return
+    if (tray && settings.get('tray')) {
+      e.preventDefault()
+      win.hide()
+      if (!trayNoticeShown && Notification.isSupported()) {
+        trayNoticeShown = true
+        new Notification({ title: 'HumbleChat sigue abierto', body: 'Está en la bandeja del sistema. Pulsa su icono para abrirlo; el menú tiene «Salir».' }).show()
+      }
+      return
+    }
+    if (!node?.voice) return
     e.preventDefault()
     dialog.showMessageBox(win, {
       type: 'question', buttons: ['Salir y colgar', 'Quedarme en la llamada'], defaultId: 1, cancelId: 1,
       title: 'Estás en una llamada', message: 'Estás en una llamada de voz.', detail: 'Si cierras HumbleChat, saldrás de la llamada.'
     }).then((r) => { if (r.response === 0) { forceClose = true; win?.close() } })
   })
-  win.on('closed', () => { win = null; rendererReady = false })
-  win.on('focus', () => win.flashFrame(false))
 
   const wc = win.webContents
   wc.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' } })
@@ -203,7 +243,7 @@ function createWindow() {
     })
   }
   wc.on('did-start-loading', () => { rendererReady = false })
-  win.loadURL(`humble://app/index.html?platform=${process.platform}`)
+  win.loadURL(`humble://app/${page}.html?platform=${process.platform}`)
 }
 
 function openExternal(url) {
@@ -281,7 +321,10 @@ function setupIpc() {
       limits: { blob: LIMITS.blob, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name },
       iceServers: network.iceServers,
       platform: process.env.HUMBLECHAT_FAKE_PLATFORM || process.platform, // solo pruebas: ver la barra de título de Windows
-      pickerNeeded: !IS_WAYLAND // en Wayland ya pregunta el portal del sistema
+      pickerNeeded: !IS_WAYLAND, // en Wayland ya pregunta el portal del sistema
+      settings: settings.all(),
+      version: app.getVersion(),
+      room: { fingerprint: fingerprint(currentKey) }
     }
   })
   handle('history', (_e, ch, opts) => (typeof ch === 'string' ? node.history(ch, opts || {}) : []))
@@ -326,20 +369,92 @@ function setupIpc() {
     ...node.diagnostics()
   }))
   handle('openExternal', (_e, url) => openExternal(url))
+
+  // ── Sala (llave del grupo) ──
+  handle('room:info', () => ({ code: currentKey ? formatCode(currentKey) : null, fingerprint: currentKey ? fingerprint(currentKey) : null, envKey: !!process.env.HUMBLECHAT_KEY }))
+  handle('room:join', async (_e, text) => {
+    const key = parseCode(text)
+    if (!key) throw new Error('Ese código no es válido. Tiene que ser el que te pasó tu amigo (64 letras y números).')
+    await switchRoom(key)
+    return true
+  })
+  handle('room:create', () => formatCode(generateKey())) // solo genera: el usuario lo copia y luego "entra" con room:join
+
+  // ── Preferencias de la aplicación ──
+  handle('settings:set', async (_e, patch) => {
+    const all = settings.set(patch)
+    if ('autostart' in patch) applyAutostart(all.autostart)
+    if ('tray' in patch) await applyTray()
+    return all
+  })
+  handle('badge', (_e, n) => setBadge(Number(n) || 0))
+
+  // ── Actualizaciones ──
+  handle('update:install', () => updates?.install())
+  handle('update:check', () => updates?.check())
 }
 
-// ───────────── Ciclo de vida ─────────────
-app.on('second-instance', () => {
-  if (!win) return
+/** Cambiar de sala sin reiniciar: se guarda la llave, se arranca la red de nuevo y se recarga la interfaz. */
+async function switchRoom(key) {
+  if (process.env.HUMBLECHAT_KEY) throw new Error('La llave está fijada por la variable HUMBLECHAT_KEY.')
+  saveKey(key)
+  if (node) { await node.stop().catch(() => {}); node = null }
+  rendererReady = false
+  await startNode(key)
+  if (win && !win.isDestroyed()) win.loadURL(`humble://app/index.html?platform=${process.platform}`)
+}
+
+// ───────────── Integración con el sistema: bandeja, inicio automático, insignia ─────────────
+async function applyTray() {
+  const want = settings.get('tray') && trayOk
+  if (want && !tray) {
+    try {
+      tray = createTray({ onShow: showWindow, onToggleMute: () => send('toggleMute', {}), onQuit: () => { forceClose = true; app.quit() } })
+    } catch { tray = null }
+  } else if (!want && tray) { tray.destroy(); tray = null }
+}
+
+function showWindow() {
+  if (!win || win.isDestroyed()) { createWindow(); return }
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()
-})
+}
+
+function applyAutostart(on) {
+  if (!app.isPackaged) return // en desarrollo registraría el binario de Electron
+  const exe = process.env.PORTABLE_EXECUTABLE_FILE || process.env.APPIMAGE || process.execPath
+  try {
+    if (process.platform === 'win32') {
+      app.setLoginItemSettings({ openAtLogin: on, path: exe, args: ['--hidden'] })
+    } else if (process.platform === 'linux') {
+      const dir = path.join(os.homedir(), '.config', 'autostart')
+      const file = path.join(dir, 'humblechat.desktop')
+      if (on) {
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(file, `[Desktop Entry]\nType=Application\nName=HumbleChat\nExec="${exe}" --hidden\nIcon=humblechat\nX-GNOME-Autostart-enabled=true\n`)
+      } else fs.rmSync(file, { force: true })
+    }
+  } catch {}
+}
+
+function setBadge(n) {
+  try {
+    if (process.platform === 'win32' && win && !win.isDestroyed()) {
+      win.setOverlayIcon(n > 0 ? nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'badge.png')) : null, n > 0 ? 'Mensajes sin leer' : '')
+    } else app.setBadgeCount(n)
+  } catch {}
+}
+
+// ───────────── Ciclo de vida ─────────────
+app.on('second-instance', showWindow)
+app.on('activate', showWindow)
 
 app.on('before-quit', (e) => {
   if (quitting || !node) return
   e.preventDefault()
   quitting = true
+  updates?.stop()
   const done = () => app.exit(0)
   node.stop().then(done, done)
   setTimeout(done, 2500).unref?.() // no te quedes colgado si la red no responde
@@ -349,11 +464,18 @@ app.on('window-all-closed', () => app.quit())
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  settings = createSettings(app.getPath('userData'))
   registerProtocol()
   setupSession()
   setupIpc()
-  await startNode()
-  powerMonitor.on('suspend', () => node.suspend())
-  powerMonitor.on('resume', () => node.resume())
-  createWindow()
+  readNetwork()
+  trayOk = await trayHostAvailable()
+  const key = resolveKey()
+  if (key) await startNode(key)
+  powerMonitor.on('suspend', () => node?.suspend())
+  powerMonitor.on('resume', () => node?.resume())
+  await applyTray()
+  createWindow(key ? 'index' : 'setup')
+  applyAutostart(settings.get('autostart'))
+  updates = startUpdates({ send, enabled: () => settings.get('updates') })
 })

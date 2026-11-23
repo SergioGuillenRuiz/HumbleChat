@@ -11,13 +11,15 @@
     "start": "node scripts/ensure-key.js && electron .",
     "test": "node --test test/core.test.js",
     "test:e2e": "node test/e2e.js",
-    "dist:win": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --win",
-    "dist:linux": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux",
-    "dist": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js",
-    "dist:all": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux AppImage pacman --win portable zip",
-    "test:smoke": "node test/smoke.js"
+    "dist:win": "node scripts/build.js win",
+    "dist:linux": "node scripts/build.js linux",
+    "dist": "node scripts/build.js all",
+    "dist:all": "node scripts/build.js all",
+    "test:smoke": "node test/smoke.js",
+    "dist:public": "node scripts/build.js all --public"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "hyperdht": "^6.21.0",
     "hyperswarm": "^4.17.2"
   },
@@ -27,5 +29,9 @@
     "playwright": "~1.63.0"
   },
   "homepage": "https://github.com/SergioGuillenRuiz/HumbleChat",
-  "desktopName": "humblechat.desktop"
+  "desktopName": "humblechat.desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SergioGuillenRuiz/HumbleChat.git"
+  }
 }

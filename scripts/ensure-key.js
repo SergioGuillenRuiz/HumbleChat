@@ -13,6 +13,8 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 
+if (process.env.HUMBLECHAT_PUBLIC) process.exit(0) // compilación pública: sin llave
+
 const file = path.join(__dirname, '..', 'group.key')
 if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim().length >= 32) process.exit(0)
 

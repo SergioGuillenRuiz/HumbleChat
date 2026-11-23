@@ -18,6 +18,8 @@ async function boot() {
   initTooltips()
   const init = await window.humble.init()
   state.firstRun = firstRun
+  state.settings = init.settings
+  state.version = init.version
   Object.assign(state, {
     me: init.me, server: init.server, channels: init.channels, status: init.status, platform: init.platform,
     pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers
@@ -58,6 +60,7 @@ async function boot() {
   bus.on('unread', () => {
     const pings = [...state.mentions.values()].reduce((a, b) => a + b, 0)
     document.title = (pings ? `(${pings}) ` : state.unread.size ? '• ' : '') + state.server
+    window.humble.badge(pings || state.unread.size).catch(() => {}) // insignia en la barra de tareas / dock
   })
   window.addEventListener('focus', touchRead)
   // Atajos como en Discord (dentro de la ventana): Ctrl+Mayús+M silencia, Ctrl+Mayús+D ensordece.
@@ -76,6 +79,18 @@ async function boot() {
   onView()
   bus.emit('unread')
   if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)
+}
+
+/** Aviso de versión nueva: se instalará sola (instalador/AppImage) o se abre la página de descarga. */
+function showUpdate(u) {
+  document.querySelector('.update-bar')?.remove()
+  const text = { downloading: `Descargando la versión ${u.version}…`, ready: `La versión ${u.version} está lista.`, available: `Hay una versión nueva (${u.version}).` }[u.state]
+  const bar = h('div.update-bar', h('span', text),
+    u.state === 'ready' && h('button', { onclick: () => window.humble.updateInstall() }, 'Reiniciar para actualizar'),
+    u.state === 'available' && h('button', { onclick: () => window.humble.openExternal(u.url) }, 'Descargar'),
+    h('button', { onclick: () => bar.remove() }, 'Ahora no'))
+  const shell = document.querySelector('.shell')
+  shell.parentNode.insertBefore(bar, shell)
 }
 
 function onView() {
@@ -102,6 +117,8 @@ function onMessage(msg) {
       return voice.sync()
     case 'status': state.status = msg.status; return bus.emit('status')
     case 'signal': return voice.onSignal(msg.from, msg.data)
+    case 'toggleMute': return state.voice && voice.toggleMute()
+    case 'update': return showUpdate(msg)
     case 'open': return openChannel(msg.ch)
   }
 }

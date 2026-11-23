@@ -22,5 +22,12 @@ contextBridge.exposeInMainWorld('humble', {
   notify: call('notify'),
   diag: call('diag'),
   openExternal: call('openExternal'),
+  roomInfo: call('room:info'),
+  roomJoin: call('room:join'),
+  roomCreate: call('room:create'),
+  setSettings: call('settings:set'),
+  badge: call('badge'),
+  updateInstall: call('update:install'),
+  updateCheck: call('update:check'),
   onMessage: (cb) => ipcRenderer.on('hc', (_e, msg) => cb(msg))
 })

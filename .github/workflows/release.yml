@@ -1,0 +1,45 @@
+name: Release
+
+# Al subir una etiqueta (por ejemplo v0.2.0) se compila SIN la llave de sala y se publica en GitHub:
+# instalador y portable de Windows, AppImage y .pacman de Linux, más los archivos que usa el actualizador.
+# Quien descargue estos archivos introduce el código de sala la primera vez.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    name: Publicar (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Dependencias (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+      - name: Compilar y publicar (Windows)
+        if: runner.os == 'Windows'
+        env:
+          HUMBLECHAT_PUBLIC: '1'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --config electron-builder.config.js --win nsis portable zip --x64 --publish always
+      - name: Compilar y publicar (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HUMBLECHAT_PUBLIC: '1'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --config electron-builder.config.js --linux AppImage pacman --x64 --publish always
