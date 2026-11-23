@@ -53,12 +53,12 @@ jobs:
         run: node scripts/ensure-key.js
       - name: Empaquetar (Windows)
         if: runner.os == 'Windows'
-        run: npx electron-builder --config electron-builder.config.js --win nsis portable zip --x64
+        run: npx electron-builder --config electron-builder.config.js --win nsis portable zip --x64 --publish never
       - name: Empaquetar (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb libarchive-tools
-          npx electron-builder --config electron-builder.config.js --linux AppImage pacman --x64
+          npx electron-builder --config electron-builder.config.js --linux AppImage pacman --x64 --publish never
       - name: Ejecutar la app empaquetada (Windows)
         if: runner.os == 'Windows'
         env:
