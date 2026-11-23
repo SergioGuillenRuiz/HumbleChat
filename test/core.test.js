@@ -420,3 +420,51 @@ test('código de sala: formato legible, parseo tolerante y huella estable', () =
   assert.notEqual(fingerprint(key), fingerprint(generateKey()))
   assert.match(fingerprint(key), /^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/)
 })
+
+test('comprobación de NAT: cono, simétrico y UDP bloqueado', async () => {
+  const { checkNat } = require('../src/core/natcheck')
+  const { startStun } = require('../scripts/own-node')
+  const rnd = () => 44000 + Math.floor(Math.random() * 4000)
+  // dos STUN reales en local: ven el mismo puerto => "cono"
+  const [p1, p2] = [rnd(), rnd() + 4001]
+  const s1 = startStun({ port: p1, host: '127.0.0.1' })
+  const s2 = startStun({ port: p2, host: '127.0.0.1' })
+  await Promise.all([s1, s2].map((s) => new Promise((r) => s.once('listening', r))))
+  const eps = [{ host: '127.0.0.1', port: p1 }, { host: '127.0.0.1', port: p2 }]
+  assert.equal((await checkNat({ endpoints: eps, timeout: 1500 })).type, 'cone')
+  s1.close(); s2.close()
+
+  // servidores "tramposos" que dicen un puerto distinto cada uno => "simétrico"
+  const fake = (offset) => {
+    const sock = dgram.createSocket('udp4')
+    sock.on('message', (msg, rinfo) => {
+      const attr = Buffer.alloc(12)
+      attr.writeUInt16BE(0x0020, 0); attr.writeUInt16BE(8, 2); attr[5] = 1
+      attr.writeUInt16BE((rinfo.port + offset) ^ 0x2112, 6)
+      '127.0.0.1'.split('.').forEach((o, i) => { attr[8 + i] = Number(o) ^ [0x21, 0x12, 0xa4, 0x42][i] })
+      const head = Buffer.alloc(20); head.writeUInt16BE(0x0101, 0); head.writeUInt16BE(12, 2); head.writeUInt32BE(0x2112a442, 4); msg.copy(head, 8, 8, 20)
+      sock.send(Buffer.concat([head, attr]), rinfo.port, rinfo.address)
+    })
+    return new Promise((r) => sock.bind(0, '127.0.0.1', () => r(sock)))
+  }
+  const [f1, f2] = [await fake(1), await fake(2)]
+  const fe = [f1, f2].map((f) => ({ host: '127.0.0.1', port: f.address().port }))
+  assert.equal((await checkNat({ endpoints: fe, timeout: 1500 })).type, 'symmetric')
+  f1.close(); f2.close()
+
+  // nadie responde => bloqueado
+  assert.equal((await checkNat({ endpoints: [{ host: '127.0.0.1', port: 9 }], timeout: 600 })).type, 'blocked')
+})
+
+test('network.json admite servidores TURN y descarta los inválidos', () => {
+  const d = tmp()
+  fs.writeFileSync(path.join(d, 'network.json'), JSON.stringify({ turn: [
+    { urls: 'turn:203.0.113.7:3478', username: 'u', credential: 'c' },
+    { urls: 'http://malo', username: 'u', credential: 'c' },
+    { urls: 'turn:x:3478' }
+  ] }))
+  const n = loadNetwork({ userDataDir: d })
+  const turn = n.iceServers.filter((s) => s.username)
+  assert.deepEqual(turn, [{ urls: 'turn:203.0.113.7:3478', username: 'u', credential: 'c' }])
+  assert.ok(n.iceServers.some((s) => !s.username), 'los STUN por defecto se mantienen')
+})

@@ -8,7 +8,10 @@
 //   equipo con IP pública y apunta a él con un `network.json` (se incluye en el instalador si lo
 //   dejas en la raíz del repo, o puede ir en la carpeta de datos de cada usuario):
 //
-//     { "bootstrap": ["203.0.113.7:49737"], "stun": ["203.0.113.7:3478"] }
+//     { "bootstrap": ["203.0.113.7:49737"], "stun": ["203.0.113.7:3478"],
+//       "turn": [{ "urls": "turn:203.0.113.7:3478", "username": "usuario", "credential": "clave" }] }
+//
+//   El TURN (por ejemplo un coturn propio) es opcional: retransmite la voz de quien no logra conexión directa.
 const fs = require('fs')
 const path = require('path')
 const { ICE_SERVERS } = require('./constants')
@@ -28,9 +31,10 @@ function loadNetwork({ userDataDir, resourcesDir, repoRoot } = {}) {
     if (!cfg || typeof cfg !== 'object') continue
     const bootstrap = list(cfg.bootstrap, HOST_PORT)
     const stun = list(cfg.stun, /^[\w.\-]+(:\d{1,5})?$/)
+    const turn = (Array.isArray(cfg.turn) ? cfg.turn : []).filter((t) => t && typeof t.urls === 'string' && /^turns?:[\w.\-:[\]]+(\?transport=(udp|tcp))?$/.test(t.urls) && typeof t.username === 'string' && typeof t.credential === 'string').slice(0, 4).map((t) => ({ urls: t.urls, username: t.username, credential: t.credential }))
     return {
       bootstrap: bootstrap.length ? bootstrap : undefined, // undefined = los públicos de Hyperswarm
-      iceServers: stun.length ? [{ urls: stun.map((s) => 'stun:' + s) }] : ICE_SERVERS,
+      iceServers: [...(stun.length ? [{ urls: stun.map((s) => 'stun:' + s) }] : ICE_SERVERS), ...turn],
       source: file
     }
   }

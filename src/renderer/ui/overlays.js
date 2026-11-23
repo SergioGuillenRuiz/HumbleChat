@@ -160,6 +160,7 @@ async function buildReport(voice) {
     'HumbleChat ' + d.version + ' · ' + d.platform + ' ' + d.arch + ' · Electron ' + d.electron,
     line('Red P2P', { online: 'conectada', connecting: 'buscando…', offline: 'sin Internet' }[d.status.state] || d.status.state),
     line('Servicios de red', d.network),
+    ...(state.nat ? [line('Tipo de red (NAT)', { cone: 'cono (bueno)', symmetric: 'simétrico (problemático)', unknown: 'desconocido', blocked: 'UDP bloqueado' }[state.nat.type]), '                       ' + state.nat.text] : []),
     ...(d.status.mismatch ? [line('¡Atención!', 'un amigo tiene OTRA VERSIÓN de la app y no puede conectarse')] : []),
     line('Amigos conectados', d.peers.length + (d.peers.length ? '  (' + d.peers.map((p) => p.name + ' ' + p.link).join(', ') + ')' : '')),
     ''
@@ -299,15 +300,90 @@ export function openSettings(voice, startTab = 'account') {
 
     refresh().then(() => { startMeter(); startPreview() })
 
+    // Supresión de ruido, umbral de sensibilidad y pulsar para hablar
+    const denoiseSel = h('select',
+      h('option', { value: 'standard', selected: state.prefs.denoise === 'standard' }, 'Estándar (recomendada)'),
+      h('option', { value: 'advanced', selected: state.prefs.denoise === 'advanced' }, 'Avanzada: estándar + RNNoise (ventiladores, teclados)'),
+      h('option', { value: 'off', selected: state.prefs.denoise === 'off' }, 'Ninguna'))
+    denoiseSel.addEventListener('change', async () => {
+      state.prefs.denoise = denoiseSel.value; store('denoise', denoiseSel.value)
+      meterOff?.(); await voice.applyDevices(); startMeter()
+    })
+
+    const mark = h('div.meter-mark')
+    const hint = h('div.level-hint')
+    const place = () => { mark.style.display = state.prefs.gate.on ? 'block' : 'none'; mark.style.left = Math.min(100, state.prefs.gate.level * 400) + '%' }
+    const slider = h('input.slider', { type: 'range', min: 5, max: 100, value: Math.round(state.prefs.gate.level * 500), oninput: () => {
+      state.prefs.gate.level = slider.value / 500; store('gate', state.prefs.gate); place()
+    } })
+    const gateSw = h('button.switch' + (state.prefs.gate.on ? '.on' : ''), { role: 'switch', onclick: () => {
+      state.prefs.gate.on = !state.prefs.gate.on; store('gate', state.prefs.gate)
+      gateSw.classList.toggle('on', state.prefs.gate.on); place()
+    } }, h('span.knob'))
+    place()
+
+    const pttBtn = h('button.btn.secondary.small.ptt-key')
+    const showPtt = () => { const k = state.prefs.ptt.key; pttBtn.textContent = k ? k.label : 'Elegir tecla'; pttBtn.classList.remove('rec') }
+    const pttSw = h('button.switch' + (state.prefs.ptt.on ? '.on' : ''), { role: 'switch', onclick: () => {
+      if (!state.prefs.ptt.on && !state.prefs.ptt.key) return toast('Elige primero una tecla.')
+      state.prefs.ptt.on = !state.prefs.ptt.on; store('ptt', state.prefs.ptt)
+      pttSw.classList.toggle('on', state.prefs.ptt.on)
+      window.humble.pttConfigure({ on: state.prefs.ptt.on, hook: state.prefs.ptt.key?.hook }).then((ok) => {
+        if (state.prefs.ptt.on && !ok) toast('Sin captura global del teclado (p. ej. Wayland): la tecla solo funciona con la ventana enfocada.', 'warn', 9000)
+      })
+    } }, h('span.knob'))
+    pttBtn.addEventListener('click', async () => {
+      pttBtn.textContent = 'Pulsa una tecla…'; pttBtn.classList.add('rec')
+      let done = false
+      const onKey = (e) => { // con la ventana enfocada también se puede asignar la tecla directamente
+        if (done) return
+        e.preventDefault(); e.stopPropagation(); done = true
+        removeEventListener('keydown', onKey, true)
+        const prev = state.prefs.ptt.key
+        state.prefs.ptt.key = { code: e.code, hook: prev?.hook ?? null, label: e.code.replace(/^Key/, '').replace(/^Digit/, '') }
+        store('ptt', state.prefs.ptt); showPtt()
+      }
+      addEventListener('keydown', onKey, true)
+      const r = await window.humble.pttRecord().catch(() => null) // la tecla global (funciona fuera de la ventana)
+      removeEventListener('keydown', onKey, true)
+      if (r) state.prefs.ptt.key = { code: state.prefs.ptt.key?.code || null, hook: r.hook, label: r.label }
+      store('ptt', state.prefs.ptt); showPtt()
+      if (state.prefs.ptt.on) window.humble.pttConfigure({ on: true, hook: state.prefs.ptt.key?.hook })
+    })
+    showPtt()
+
+    // Aviso de nivel del micrófono (bajo, correcto, saturado) a partir de los picos de los últimos segundos
+    let peak = 0
+    let hintAt = 0
+    const levelLoop = setInterval(() => {
+      const l = voice.micLevel()
+      peak = Math.max(peak * 0.995, l)
+      if (performance.now() - hintAt < 700) return
+      hintAt = performance.now()
+      if (!meterOff) return hint.replaceChildren()
+      const [msg, warn] = peak < 0.015 ? ['No se oye nada: habla un poco o comprueba que el micrófono no esté silenciado.', true]
+        : peak < 0.06 ? ['Se oye muy bajo: acércate al micrófono o sube su volumen en el sistema.', true]
+        : peak > 0.6 ? ['Está saturando: baja el volumen del micrófono en el sistema.', true]
+        : ['Nivel correcto.', false]
+      hint.textContent = msg
+      hint.classList.toggle('warn', warn)
+    }, 100)
+    const prevStop2 = meterStop
+    meterStop = () => { clearInterval(levelLoop); prevStop2?.() }
+
     return h('div',
       h('h2', 'Voz y vídeo'),
       h('p.muted', 'Todo viene configurado: se usan los dispositivos predeterminados del sistema y, si conectas o desconectas unos auriculares, la app se adapta sola.'),
       h('label.field', 'Dispositivo de entrada (micrófono)', inSel),
       h('label.field', 'Dispositivo de salida (altavoces o auriculares)', outSel),
-      h('div.field', h('div.label', 'Prueba de micrófono'), h('div.meter', bar)),
+      h('div.field', h('div.label', 'Prueba de micrófono'), h('div.meter', bar, mark), hint),
+      h('label.field', 'Supresión de ruido', denoiseSel),
+      h('div.sw-row', h('div', h('div.sw-label', 'Umbral de sensibilidad'), h('div.muted', 'Solo se transmite cuando hablas por encima de la marca blanca. Útil si tu micrófono capta ruido de fondo.'), slider), gateSw),
+      h('div.sw-row', h('div', h('div.sw-label', 'Pulsar para hablar'), h('div.muted', 'El micrófono solo transmite mientras mantienes la tecla elegida, aunque la app esté en segundo plano (no en Wayland).')),
+        h('div.row', pttBtn, pttSw)),
       h('label.field', 'Cámara', camSel),
       camBox,
-      h('p.muted', 'Cancelación de eco, supresión de ruido y control automático de ganancia: activados.'))
+      h('p.muted', 'Cancelación de eco y control automático de ganancia: activados.'))
   }
 
   function notif() {
@@ -331,6 +407,7 @@ export function openSettings(voice, startTab = 'account') {
     const copy = h('button.btn.brand', {
       onclick: () => navigator.clipboard.writeText(box.textContent).then(() => toast('Informe copiado', 'ok'), () => toast('No se pudo copiar', 'warn'))
     }, 'Copiar informe')
+    const nat = h('button.btn.secondary', { onclick: async () => { nat.disabled = true; nat.textContent = 'Comprobando…'; state.nat = await window.humble.natCheck().catch(() => null); nat.disabled = false; nat.textContent = 'Comprobar mi red' } }, 'Comprobar mi red')
     let timer = null
     const refresh = async () => {
       if (!box.isConnected) return clearInterval(timer)
@@ -342,7 +419,7 @@ export function openSettings(voice, startTab = 'account') {
     setTimeout(refresh, 50) // tras insertar el panel en el DOM
     return h('div', h('h2', 'Diagnóstico'),
       h('p.muted', 'Estado de la red y de las llamadas, útil para saber por qué algo no va bien. No incluye IPs ni mensajes.'),
-      box, h('div.row', copy))
+      box, h('div.row', copy, nat))
   }
 
   // ── Sala: huella, código, cambiar de sala ──

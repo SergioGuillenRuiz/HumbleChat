@@ -6,6 +6,11 @@ import { toast, openShareDialog } from './ui/overlays.js'
 import { store } from './util.js'
 
 const links = new Map() // id remoto -> Link
+// Relé de voz por un tercero cuando la conexión directa entre dos amigos falla (NAT estricto):
+const relayOffers = new Map() // x -> Set(ids que pueden retransmitir)   (lado que pide)
+const relaying = new Map() // 'a|x' -> { a, x, items: [{ to, sender }] }     (lado que retransmite)
+const relayedAudio = new Map() // quién -> { stream, via }                      (lado que recibe)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let mic = null
 let screen = null
 let camStream = null
@@ -28,7 +33,7 @@ const dbg = () => store('dbg') || {} // ajustes de depuración (solo para medir)
 
 // ───────────── API pública ─────────────
 export const voice = {
-  join, leave, sync, onSignal, toggleMute, toggleDeafen, startShare, stopShare, watch, getVolume, setVolume, applyDevices, applyCamera, toggleCamera, diagnostics
+  join, leave, sync, onSignal, toggleMute, toggleDeafen, startShare, stopShare, watch, getVolume, setVolume, applyDevices, applyCamera, toggleCamera, diagnostics, setPtt, micLevel
 }
 
 export async function diagnostics() {
@@ -55,8 +60,9 @@ function publish() {
 
 async function getMic() {
   // Procesado de voz de Chromium (eco, ruido, ganancia) a 48 kHz mono, con baja latencia.
+  const mode = state.prefs.denoise || 'standard' // standard | advanced (estándar + RNNoise) | off
   const base = {
-    echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+    echoCancellation: true, noiseSuppression: mode !== 'off', autoGainControl: true,
     channelCount: 1, sampleRate: { ideal: 48000 }, sampleSize: { ideal: 16 }, latency: { ideal: 0.02 }
   }
   let stream
@@ -65,8 +71,42 @@ async function getMic() {
   }
   stream ||= await navigator.mediaDevices.getUserMedia({ audio: base })
   for (const t of stream.getAudioTracks()) t.contentHint = 'speech'
-  return stream
+  if (mode !== 'advanced') return stream
+  try { return await withRnnoise(stream) } catch (e) {
+    console.warn('RNNoise no disponible:', e)
+    toast('No se pudo activar la supresión avanzada de ruido; se usa la estándar.', 'warn')
+    state.prefs.denoise = 'standard'
+    store('denoise', 'standard')
+    return stream
+  }
 }
+
+/** Supresión avanzada: la voz pasa por RNNoise (red neuronal) antes de enviarse. Quita bien ventiladores y teclados. */
+async function withRnnoise(raw) {
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' })
+  try {
+    await ctx.audioWorklet.addModule('vendor/rnnoise-worklet.js')
+    const wasm = await (await fetch('vendor/rnnoise.wasm')).arrayBuffer()
+    const src = ctx.createMediaStreamSource(raw)
+    const node = new AudioWorkletNode(ctx, 'rnnoise', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1], processorOptions: { wasm } })
+    const dest = ctx.createMediaStreamDestination()
+    src.connect(node)
+    node.connect(dest)
+    const out = dest.stream
+    out._raw = raw // el micrófono real (para cerrarlo y para detectar que se desconecta)
+    out._ctx = ctx
+    for (const t of out.getAudioTracks()) t.contentHint = 'speech'
+    return out
+  } catch (e) { ctx.close().catch(() => {}); throw e }
+}
+
+function stopMic(m) {
+  if (!m) return
+  for (const t of (m._raw || m).getTracks()) { t.onended = null; t.stop() }
+  m._ctx?.close().catch(() => {})
+  m.getTracks().forEach((t) => t.stop())
+}
+const rawTrack = (m) => (m?._raw || m)?.getAudioTracks()[0]
 
 /** Mensaje con instrucciones según el error y el sistema, en lugar de un "no funciona" genérico. */
 function explainMediaError(e, what) {
@@ -118,7 +158,7 @@ async function join(ch) {
   try { mic = await getMic() } catch (e) { mic = null; noMic = true; micErr = e }
   state.voice = { ch, muted: noMic, deafened: false, sharing: false, noMic, cam: false }
   if (noMic) toast('Entras solo para escuchar. ' + explainMediaError(micErr, 'mic'), 'warn', 10000)
-  if (mic) { startMeter('me', mic); watchMic() }
+  if (mic) { startMeter('me', mic); watchMic(); clearInterval(gateTimer); gateTimer = setInterval(gateTick, 25) }
   navigator.mediaDevices.ondevicechange = onDeviceChange
   applyMute()
   roster = null
@@ -137,10 +177,12 @@ async function leave(sound = true) {
   stopCamera(false)
   navigator.mediaDevices.ondevicechange = null
   for (const id of [...links.keys()]) closeLink(id)
-  mic?.getTracks().forEach((t) => { t.onended = null; t.stop() })
+  stopMic(mic)
   mic = null
+  clearInterval(gateTimer)
+  pttDown = false
   clearInterval(qualityTimer)
-  meters.clear()
+  for (const k of [...meters.keys()]) dropMeter(k)
   clearInterval(meterTimer)
   meterTimer = null
   for (const id of [...state.speaking]) state.speaking.delete(id)
@@ -156,9 +198,47 @@ async function leave(sound = true) {
   bus.emit('streams')
 }
 
+let pttDown = false
+let gateTimer = null
+let gateUntil = 0
+let gateOpen = true
+
+/** Nivel instantáneo (RMS 0..1) del micrófono local. */
+function micLevel() {
+  const m = meters.get('me')
+  if (!m) return 0
+  m.an.getByteTimeDomainData(m.buf)
+  let sum = 0
+  for (const v of m.buf) { const x = (v - 128) / 128; sum += x * x }
+  return Math.sqrt(sum / m.buf.length)
+}
+
+/**
+ * ¿Se transmite ahora el micrófono? Silenciado = no. Con "pulsar para hablar", solo mientras se mantiene la tecla.
+ * Con umbral de sensibilidad, solo cuando el nivel lo supera (con 350 ms de margen para no cortar palabras).
+ */
+function gateTick() {
+  if (!state.voice || !mic) return
+  const { ptt, gate } = state.prefs
+  if (ptt?.on) gateOpen = pttDown
+  else if (gate?.on) {
+    if (micLevel() > gate.level) gateUntil = performance.now() + 350
+    gateOpen = performance.now() < gateUntil
+  } else gateOpen = true
+  const on = !isMuted() && gateOpen
+  for (const t of mic.getAudioTracks()) if (t.enabled !== on) t.enabled = on
+}
+
+function setPtt(down) {
+  if (!state.prefs.ptt?.on || pttDown === down) return
+  pttDown = down
+  gateTick()
+  bus.emit('voice')
+}
+
 function applyMute() {
   const off = isMuted()
-  mic?.getAudioTracks().forEach((t) => { t.enabled = !off })
+  gateTick()
   for (const l of links.values()) l.audio.muted = !!state.voice?.deafened
 }
 
@@ -260,6 +340,12 @@ class Link {
     this.remoteCam = null // id del flujo de cámara y de pantalla del otro (para distinguir los vídeos)
     this.remoteScr = null
     this.unknown = []
+    this.viaMap = new Map() // id de flujo -> de quién es la voz (si nos la retransmite este amigo)
+    this.audioSids = new Set()
+    this.pendingAudio = []
+    this.remoteStream = null
+    this.relayedBy = null // si la voz de este amigo nos llega retransmitida por otro
+    this.failedOnce = false
     this.queue = Promise.resolve()
     this.rebuilds = 0
     this.closed = false
@@ -270,7 +356,8 @@ class Link {
     this.audio.muted = !!state.voice?.deafened
     if (state.prefs.output && this.audio.setSinkId) this.audio.setSinkId(state.prefs.output).catch(() => {})
 
-    const pc = (this.pc = new RTCPeerConnection({ iceServers: state.iceServers, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 2 }))
+    const blocked = (dbg().blockDirect || []).includes(id) // solo pruebas: simula un NAT que impide la conexión directa
+    const pc = (this.pc = new RTCPeerConnection({ iceServers: state.iceServers, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 2, ...(blocked ? { iceTransportPolicy: 'relay' } : {}) }))
     if (mic) for (const t of mic.getAudioTracks()) pc.addTrack(t, mic)
     else pc.addTransceiver('audio', { direction: 'recvonly' })
 
@@ -288,7 +375,8 @@ class Link {
     // Si en 10 s no hay audio fluyendo, rehacer el enlace desde cero en ambos extremos.
     this.watchdog = setTimeout(() => this.stalled(), 10000)
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') { clearTimeout(this.watchdog); this.tune() }
+      if (pc.connectionState === 'connected') { clearTimeout(this.watchdog); this.failedOnce = false; this.tune(); this.directRecovered() }
+      else if (pc.connectionState === 'failed') this.onFailed()
     }
     pc.onsignalingstatechange = () => { if (pc.signalingState === 'stable') this.tune() }
     this.tune()
@@ -338,15 +426,37 @@ class Link {
       this.syncScreen()
     } else if (m.k === 'r') { // el otro lado rehízo el enlace
       rebuild(this.id, false)
+    } else if (m.k === 'rq') { // "¿alguien puede retransmitir entre a y x?"
+      const a = links.get(this.id)
+      const x = links.get(m.x)
+      if (a?.pc.connectionState === 'connected' && x?.pc.connectionState === 'connected') this.send({ k: 'rk', x: m.x })
+    } else if (m.k === 'rk') relayOffers.get(m.x)?.add(this.id)
+    else if (m.k === 'rp') startRelay(this.id, m.x)
+    else if (m.k === 'rd') stopRelay(this.id, m.x)
+    else if (m.k === 'via') {
+      this.viaMap.set(m.sid, m.who)
+      const i = this.pendingAudio.findIndex((x) => x.stream.id === m.sid)
+      if (i >= 0) attachRelayed(m.who, this.pendingAudio.splice(i, 1)[0].stream, this.id)
     }
   }
 
   onTrack(e) {
     if (e.track.kind === 'audio') {
       const stream = e.streams[0] || new MediaStream([e.track])
-      this.audio.srcObject = stream
-      this.audio.play().catch(() => {})
-      startMeter(this.id, stream)
+      if (this.viaMap.has(stream.id)) return attachRelayed(this.viaMap.get(stream.id), stream, this.id)
+      if (this.audioSids.size && !this.audioSids.has(stream.id)) { // segundo flujo de audio: voz de otro, retransmitida
+        const item = { stream }
+        this.pendingAudio.push(item)
+        setTimeout(() => { this.pendingAudio = this.pendingAudio.filter((x) => x !== item) }, 8000)
+        return
+      }
+      this.audioSids.add(stream.id)
+      this.remoteStream = stream
+      if (!this.relayedBy) { // si ya nos llega por relé, el directo se guarda para cuando el relé termine
+        this.audio.srcObject = stream
+        this.audio.play().catch(() => {})
+        startMeter(this.id, stream)
+      }
     } else if (e.track.kind === 'video') {
       this.classify(e.streams[0]?.id, e.track)
     }
@@ -434,7 +544,7 @@ class Link {
 
   /** Estado detallado de este enlace para la pestaña Diagnóstico (las tasas se calculan entre llamadas). */
   async stats() {
-    const out = { id: this.id, state: this.pc.connectionState, path: '—', rtt: null }
+    const out = { id: this.id, state: this.relayedBy ? 'retransmitido' : this.pc.connectionState, path: this.relayedBy ? `retransmitido por ${state.byId.get(this.relayedBy)?.name || 'un amigo'}` : '—', rtt: null }
     const st = await this.pc.getStats()
     const byId = new Map()
     st.forEach((r) => byId.set(r.id, r))
@@ -444,7 +554,7 @@ class Link {
     if (pair) {
       if (pair.currentRoundTripTime != null) out.rtt = Math.round(pair.currentRoundTripTime * 1000)
       const types = [byId.get(pair.localCandidateId)?.candidateType, byId.get(pair.remoteCandidateId)?.candidateType]
-      out.path = types.includes('relay') ? 'por relé' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
+      if (!this.relayedBy) out.path = types.includes('relay') ? 'por relé TURN' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
     }
     const prev = this.prev || {}
     const cur = {}
@@ -475,8 +585,27 @@ class Link {
 
   stalled() {
     if (this.closed || this.pc.connectionState === 'connected') return
+    this.onFailed()
     if (this.rebuilds >= 4) return
-    rebuild(this.id, true)
+    // Se sigue intentando la conexión directa de vez en cuando; mientras tanto, la voz va por relé.
+    setTimeout(() => { if (!this.closed && links.get(this.id) === this && this.pc.connectionState !== 'connected') rebuild(this.id, true) }, 30000)
+  }
+
+  /** La conexión directa no se establece: se pide a un tercero que retransmita el audio. */
+  onFailed() {
+    if (this.failedOnce) return
+    this.failedOnce = true
+    requestRelay(this.id)
+  }
+
+  /** La directa ha vuelto a funcionar: se cancela el relé. */
+  directRecovered() {
+    if (!this.relayedBy) return
+    const via = this.relayedBy
+    this.relayedBy = null
+    relayedAudio.delete(this.id)
+    links.get(via)?.send({ k: 'rd', x: this.id })
+    if (this.remoteStream) { this.audio.srcObject = this.remoteStream; this.audio.play().catch(() => {}); startMeter(this.id, this.remoteStream) }
   }
 
   close() {
@@ -484,7 +613,7 @@ class Link {
     clearTimeout(this.watchdog)
     this.pc.onnegotiationneeded = this.pc.onicecandidate = this.pc.ontrack = null
     this.pc.close()
-    this.audio.srcObject = null
+    if (!relayedAudio.has(this.id)) this.audio.srcObject = null
     meters.delete(this.id)
     state.streams.delete(this.id)
     state.cams.delete(this.id)
@@ -502,7 +631,82 @@ function closeLink(id) {
   if (!l) return
   links.delete(id)
   l.close()
+  // Si este amigo retransmitía para otros, se corta; si nos retransmitía a nosotros, se vuelve a pedir otro.
+  for (const r of [...relaying.values()]) if (r.a === id || r.x === id) stopRelay(r.a, r.x)
+  for (const [who, r] of [...relayedAudio]) {
+    if (r.via !== id && who !== id) continue
+    relayedAudio.delete(who)
+    const t = links.get(who)
+    if (!t) continue
+    t.relayedBy = null
+    t.audio.srcObject = null
+    meters.delete(who)
+    if (t.pc.connectionState !== 'connected') { t.failedOnce = false; setTimeout(() => t.onFailed(), 1000) }
+  }
   bus.emit('streams')
+}
+
+// ───────────── Relé de voz por un tercero ─────────────
+/** Pide a los demás que retransmitan entre yo y x. Lo inicia el de id menor para que no lo pidan los dos. */
+function requestRelay(x) {
+  if (!state.voice || state.me.id > x) return
+  relayOffers.set(x, new Set())
+  for (const [id, l] of links) if (id !== x) l.send({ k: 'rq', x })
+  setTimeout(() => {
+    const offers = relayOffers.get(x)
+    relayOffers.delete(x)
+    const link = links.get(x)
+    if (!link || link.pc.connectionState === 'connected') return
+    if (!offers?.size) { // nadie puede: se reintenta más tarde
+      setTimeout(() => { const l = links.get(x); if (l && l.pc.connectionState !== 'connected') { l.failedOnce = false; l.onFailed() } }, 8000)
+      return
+    }
+    links.get([...offers].sort()[0])?.send({ k: 'rp', x }) // el de id menor retransmite
+  }, 1500)
+}
+
+/** Yo soy el relé: reenvío la voz de a hacia x y la de x hacia a. */
+function startRelay(a, x) {
+  const key = [a, x].sort().join('|')
+  const la = links.get(a)
+  const lx = links.get(x)
+  if (relaying.has(key) || !la || !lx) return
+  const rec = { a, x, items: [] }
+  relaying.set(key, rec)
+  const forward = async (from, to) => {
+    for (let i = 0; i < 25 && !from.remoteStream; i++) await sleep(300)
+    if (!from.remoteStream || relaying.get(key) !== rec || to.closed) return
+    const sender = to.pc.addTrack(from.remoteStream.getAudioTracks()[0], from.remoteStream)
+    rec.items.push({ to, sender })
+    to.send({ k: 'via', who: from.id, sid: from.remoteStream.id })
+  }
+  forward(la, lx)
+  forward(lx, la)
+}
+
+function stopRelay(a, x) {
+  const key = [a, x].sort().join('|')
+  const rec = relaying.get(key)
+  if (!rec) return
+  relaying.delete(key)
+  for (const { to, sender } of rec.items) {
+    if (to.closed) continue
+    const tr = to.pc.getTransceivers().find((t) => t.sender === sender)
+    try { to.pc.removeTrack(sender) } catch {}
+    try { tr?.stop() } catch {}
+  }
+}
+
+/** Me llega la voz de `who` retransmitida por `via`: se reproduce en lugar de la conexión directa. */
+function attachRelayed(who, stream, via) {
+  const t = links.get(who)
+  if (!t || t.pc.connectionState === 'connected') return
+  t.relayedBy = via
+  relayedAudio.set(who, { stream, via })
+  t.audio.srcObject = stream
+  t.audio.play().catch(() => {})
+  startMeter(who, stream)
+  bus.emit('voice')
 }
 
 function rebuild(id, notify) {
@@ -624,7 +828,7 @@ async function applyCamera() {
 
 // ───────────── Micrófono en caliente (conectar/desconectar auriculares) ─────────────
 function watchMic() {
-  const t = mic?.getAudioTracks()[0]
+  const t = rawTrack(mic)
   if (t) t.onended = () => reacquireMic('Se desconectó tu micrófono: se usa el predeterminado del sistema.')
 }
 
@@ -644,13 +848,15 @@ async function reacquireMic(message) {
   try { next = await getMic() } catch (e) { toast(explainMediaError(e, 'mic'), 'warn', 10000); return false }
   if (!state.voice) return next.getTracks().forEach((t) => t.stop())
   await setMicTrack(next.getAudioTracks()[0])
-  mic?.getTracks().forEach((t) => { t.onended = null; t.stop() })
+  stopMic(mic)
   mic = next
   watchMic()
-  meters.delete('me')
+  dropMeter('me')
   startMeter('me', mic)
   state.voice.noMic = false
   if (wasNoMic) state.voice.muted = false
+  clearInterval(gateTimer)
+  gateTimer = setInterval(gateTick, 25)
   applyMute()
   for (const l of links.values()) l.tune()
   publish()
@@ -671,7 +877,7 @@ async function handleDevices() {
   const devs = await navigator.mediaDevices.enumerateDevices().catch(() => [])
   const ins = devs.filter((d) => d.kind === 'audioinput')
   const def = ins.find((d) => d.deviceId === 'default')?.groupId || ''
-  const curId = mic?.getAudioTracks()[0]?.getSettings().deviceId
+  const curId = rawTrack(mic)?.getSettings().deviceId
   if (state.voice.noMic && ins.length) await reacquireMic('Se ha detectado un micrófono: ya puedes hablar.')
   else if (mic && curId && !ins.some((d) => d.deviceId === curId)) await reacquireMic('Se desconectó tu micrófono: se usa el predeterminado del sistema.')
   else if (mic && !state.prefs.input && def && lastDefaultIn && def !== lastDefaultIn) await reacquireMic('Has cambiado el micrófono predeterminado: la app lo sigue.')
@@ -687,16 +893,25 @@ async function handleDevices() {
   }
 }
 
+/** Los medidores de nivel. El del micrófono propio escucha una COPIA de la pista: la original se desactiva al
+ *  silenciar o con el umbral/pulsar-para-hablar, y el medidor debe seguir viendo la voz para poder reabrirla. */
 function startMeter(id, stream) {
   try {
     ac ||= new AudioContext()
+    let clone = null
+    if (id === 'me') { clone = stream.getAudioTracks()[0].clone(); stream = new MediaStream([clone]) }
     const src = ac.createMediaStreamSource(stream)
     const an = ac.createAnalyser()
     an.fftSize = 512
     src.connect(an)
-    meters.set(id, { src, an, buf: new Uint8Array(an.fftSize), until: 0 })
+    meters.set(id, { src, an, buf: new Uint8Array(an.fftSize), until: 0, clone })
     meterTimer ||= setInterval(tick, 90)
   } catch {}
+}
+
+function dropMeter(id) {
+  meters.get(id)?.clone?.stop()
+  meters.delete(id)
 }
 
 function tick() {
@@ -708,7 +923,7 @@ function tick() {
     for (const v of m.buf) { const x = (v - 128) / 128; sum += x * x }
     if (Math.sqrt(sum / m.buf.length) > 0.02) m.until = now + 300
     const id = key === 'me' ? state.me.id : key
-    const on = now < m.until && !(key === 'me' && isMuted())
+    const on = now < m.until && !(key === 'me' && (isMuted() || !gateOpen))
     if (on !== state.speaking.has(id)) { on ? state.speaking.add(id) : state.speaking.delete(id); changed = true }
   }
   if (changed) bus.emit('speaking')

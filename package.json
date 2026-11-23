@@ -21,7 +21,8 @@
   "dependencies": {
     "electron-updater": "^6.8.11",
     "hyperdht": "^6.21.0",
-    "hyperswarm": "^4.17.2"
+    "hyperswarm": "^4.17.2",
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
     "electron": "^45.4.1",

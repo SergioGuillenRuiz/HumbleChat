@@ -63,6 +63,11 @@ async function boot() {
     window.humble.badge(pings || state.unread.size).catch(() => {}) // insignia en la barra de tareas / dock
   })
   window.addEventListener('focus', touchRead)
+  // Pulsar para hablar: tecla global (desde Electron) y, además, con la ventana enfocada.
+  const pttKey = (e) => state.prefs.ptt?.on && state.prefs.ptt.key?.code && e.code === state.prefs.ptt.key.code
+  window.addEventListener('keydown', (e) => { if (pttKey(e) && !e.repeat) voice.setPtt(true) })
+  window.addEventListener('keyup', (e) => { if (pttKey(e)) voice.setPtt(false) })
+  if (state.prefs.ptt?.on) window.humble.pttConfigure({ on: true, hook: state.prefs.ptt.key?.hook }).catch(() => {})
   // Atajos como en Discord (dentro de la ventana): Ctrl+Mayús+M silencia, Ctrl+Mayús+D ensordece.
   window.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey && e.shiftKey) || !state.voice) return
@@ -118,6 +123,7 @@ function onMessage(msg) {
     case 'status': state.status = msg.status; return bus.emit('status')
     case 'signal': return voice.onSignal(msg.from, msg.data)
     case 'toggleMute': return state.voice && voice.toggleMute()
+    case 'ptt': return voice.setPtt(msg.down)
     case 'update': return showUpdate(msg)
     case 'open': return openChannel(msg.ch)
   }

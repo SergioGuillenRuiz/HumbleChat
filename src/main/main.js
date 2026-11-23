@@ -5,9 +5,11 @@ const fs = require('fs')
 const os = require('os')
 const { ChatNode } = require('../core/node')
 const { findGroupKey, generateKey, formatCode, parseCode, fingerprint } = require('../core/groupkey')
+const { checkNat, EXPLAIN } = require('../core/natcheck')
 const { createSettings } = require('./settings')
 const { startUpdates } = require('./updates')
 const { trayHostAvailable, createTray } = require('./tray')
+const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
 const { CHANNELS, SERVER_NAME, LIMITS } = require('../core/constants')
 
@@ -388,6 +390,9 @@ function setupIpc() {
     return all
   })
   handle('badge', (_e, n) => setBadge(Number(n) || 0))
+  handle('ptt:configure', (_e, cfg) => ptt.configure(cfg || {}))
+  handle('ptt:record', () => ptt.record())
+  handle('nat:check', async () => { const r = await checkNat(); return { type: r.type, text: EXPLAIN[r.type] } })
 
   // ── Actualizaciones ──
   handle('update:install', () => updates?.install())
@@ -469,6 +474,7 @@ app.whenReady().then(async () => {
   setupSession()
   setupIpc()
   readNetwork()
+  ptt.init(send)
   trayOk = await trayHostAvailable()
   const key = resolveKey()
   if (key) await startNode(key)

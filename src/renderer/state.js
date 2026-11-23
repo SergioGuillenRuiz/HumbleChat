@@ -27,7 +27,7 @@ export const state = {
   watching: null, // id de quien estás viendo compartir pantalla
   streams: new Map(), // id -> MediaStream de pantalla
   cams: new Map(), // id -> MediaStream de cámara
-  prefs: { input: store('input') || '', output: store('output') || '', camera: store('camera') || '' },
+  prefs: { input: store('input') || '', output: store('output') || '', camera: store('camera') || '', denoise: store('denoise') || 'standard', gate: store('gate') || { on: false, level: 0.05 }, ptt: store('ptt') || { on: false, key: null } },
   firstRun: 0,
   typing: new Map(), // canal -> Map(id -> caduca)
   mentions: new Map(), // canal -> nº de menciones sin leer

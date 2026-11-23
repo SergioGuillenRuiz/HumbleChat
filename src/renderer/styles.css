@@ -504,3 +504,11 @@ pre.diag { margin: 0 0 16px; padding: 14px; background: #1e1f22; border-radius: 
 .code-box { display: flex; gap: 8px; align-items: center; margin: 8px 0 12px; }
 .code-box code { flex: 1; padding: 10px; border-radius: 4px; background: #1e1f22; font-size: 13px; word-break: break-all; user-select: text; }
 .fp { font: 600 18px var(--mono); color: var(--text-head); letter-spacing: .04em; }
+
+.meter { position: relative; }
+.meter-mark { position: absolute; top: -3px; bottom: -3px; width: 3px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.level-hint { margin-top: 6px; font-size: 13px; color: var(--text-muted); min-height: 18px; }
+.level-hint.warn { color: var(--yellow); }
+input[type=range].slider { width: 100%; accent-color: var(--brand); margin-top: 8px; }
+.ptt-key { min-width: 120px; }
+.ptt-key.rec { background: var(--brand); color: #fff; }
