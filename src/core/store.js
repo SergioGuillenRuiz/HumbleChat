@@ -4,7 +4,8 @@
 // Da igual quién esté conectado o quién fuera el primero: la unión de los registros es el historial.
 //
 // Tipos de evento:  msg (mensaje, opcionalmente respuesta) · del (borrar uno propio) · edit (editar uno propio)
-//                   react (poner/quitar una reacción) · prof (nombre de usuario)
+//                   react (poner/quitar una reacción) · prof (nombre y avatar) · chan (crear/renombrar/borrar un canal)
+//                   pin (fijar/desfijar) · emb (vista previa de un enlace) · dm (mensaje directo cifrado)
 const fs = require('fs')
 const path = require('path')
 const { CHANNELS, LIMITS } = require('./constants')
@@ -13,15 +14,25 @@ const { verify, HEX128 } = require('./sign')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const EVENT_ID = /^[0-9a-f]{64}:\d{1,10}$/
-const TEXT_CHANNELS = new Set(CHANNELS.filter((c) => c.type === 'text').map((c) => c.id))
+const CHAN_ID = /^[a-z0-9-]{1,32}$/
+const B64 = /^[A-Za-z0-9+/]+={0,2}$/
+const CTRL = /\p{Cc}/u
 
 const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max
 const str = (v, max) => typeof v === 'string' && v.length <= max
 
+/** Nombre de canal: los de texto en minúsculas y con guiones (como Discord); los de voz, tal cual. '' si no vale. */
+function cleanChannelName(kind, s) {
+  let n = String(s ?? '').replace(/\s+/g, ' ').trim()
+  if (kind === 'text') n = n.toLowerCase().replace(/\s/g, '-').replace(/[^\p{L}\p{N}_-]/gu, '').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '')
+  else n = n.replace(/\p{Cc}/gu, '')
+  return n.slice(0, LIMITS.channelName)
+}
+
 function cleanAttachment(a) {
   if (!a || typeof a !== 'object') return null
   if (!HEX64.test(a.h) || !str(a.name, 120) || !str(a.mime, 80)) return null
-  if (!/^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(a.mime)) return null
+  if (!/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i.test(a.mime) || CTRL.test(a.name)) return null
   if (!isInt(a.size, 1, LIMITS.blob)) return null
   const out = { h: a.h, name: a.name, mime: a.mime, size: a.size }
   if (isInt(a.w, 1, 30000) && isInt(a.ht, 1, 30000)) { out.w = a.w; out.ht = a.ht }
@@ -35,7 +46,7 @@ function cleanEvent(e) {
   if (typeof e.sig !== 'string' || !HEX128.test(e.sig)) return null
   const ev = { a: e.a, n: e.n, ts: Math.floor(e.ts), t: e.t, sig: e.sig }
   if (e.t === 'msg') {
-    if (!TEXT_CHANNELS.has(e.ch) || !str(e.text, LIMITS.text)) return null
+    if (typeof e.ch !== 'string' || !CHAN_ID.test(e.ch) || !str(e.text, LIMITS.text)) return null
     ev.ch = e.ch
     ev.text = e.text
     if (e.att !== undefined) {
@@ -63,6 +74,31 @@ function cleanEvent(e) {
   } else if (e.t === 'prof') {
     ev.name = cleanName(e.name)
     if (!ev.name) return null
+    if (e.av !== undefined && e.av !== null) {
+      if (!HEX64.test(e.av) || !isInt(e.avs, 1, LIMITS.avatar)) return null
+      ev.av = e.av
+      ev.avs = e.avs
+    }
+  } else if (e.t === 'chan') {
+    if (typeof e.ch !== 'string' || !CHAN_ID.test(e.ch) || (e.k !== 'text' && e.k !== 'voice')) return null
+    ev.ch = e.ch
+    ev.k = e.k
+    ev.name = cleanChannelName(e.k, e.name)
+    if (!ev.name) return null
+    ev.del = !!e.del
+  } else if (e.t === 'pin') {
+    if (!EVENT_ID.test(e.x) || typeof e.on !== 'boolean') return null
+    ev.x = e.x
+    ev.on = e.on
+  } else if (e.t === 'emb') {
+    if (!EVENT_ID.test(e.x) || !str(e.url, 500) || !str(e.title, 200) || !str(e.desc, 500) || !str(e.site, 100)) return null
+    if ([e.url, e.title, e.desc, e.site].some((v) => CTRL.test(v)) || !(e.title || e.desc)) return null
+    try { if (!/^https?:$/.test(new URL(e.url).protocol)) return null } catch { return null }
+    Object.assign(ev, { x: e.x, url: e.url, title: e.title, desc: e.desc, site: e.site })
+  } else if (e.t === 'dm') {
+    if (!HEX64.test(e.to) || e.to === e.a || !str(e.box, 12000) || e.box.length < 40 || !B64.test(e.box)) return null
+    ev.to = e.to
+    ev.box = e.box
   } else return null
   return ev
 }
@@ -78,6 +114,10 @@ class Store {
     this.contig = new Map() // autor -> mayor n sin huecos
     this.maxN = new Map() // autor -> mayor n visto
     this.chan = new Map(CHANNELS.filter((c) => c.type === 'text').map((c) => [c.id, []])) // msgs ordenados
+    this.chans = new Map(CHANNELS.map((c) => [c.id, { def: c, k: c.type, first: null, cur: null }])) // canales: predefinidos + creados
+    this.pins = new Map() // id del mensaje -> evento pin más reciente
+    this.embeds = new Map() // id del mensaje -> vista previa (la última de su autor)
+    this.dms = new Map() // "a:b" (ordenado) -> mensajes directos ordenados (cifrados)
     this.deleted = new Set() // ids borrados (aunque aún no haya llegado el msg)
     this.names = new Map() // autor -> { name, n }
     this.edits = new Map() // id del mensaje -> { text, n } (la última edición de su autor)
@@ -142,21 +182,30 @@ class Store {
     if (c) this.contig.set(ev.a, c)
 
     if (ev.t === 'msg') {
-      if (!this.deleted.has(id)) {
-        const list = this.chan.get(ev.ch)
-        let i = list.length
-        while (i > 0 && cmp(list[i - 1], ev) > 0) i--
-        list.splice(i, 0, ev)
-      }
+      if (!this.deleted.has(id)) this._place(this.chan.get(ev.ch) || this.chan.set(ev.ch, []).get(ev.ch), ev)
+    } else if (ev.t === 'dm') {
+      if (!this.deleted.has(id)) this._place(this._thread(ev.a, ev.to), ev)
     } else if (ev.t === 'del') {
       if (ev.x.startsWith(ev.a + ':')) { // solo puedes borrar lo tuyo
         this.deleted.add(ev.x)
         const target = this.events.get(ev.x)
-        if (target) {
-          const list = this.chan.get(target.ch)
-          const i = list.indexOf(target)
-          if (i >= 0) list.splice(i, 1)
-        }
+        const list = target && (target.t === 'msg' ? this.chan.get(target.ch) : target.t === 'dm' ? this._thread(target.a, target.to) : null)
+        const i = list ? list.indexOf(target) : -1
+        if (i >= 0) list.splice(i, 1)
+      }
+    } else if (ev.t === 'chan') {
+      let c = this.chans.get(ev.ch)
+      if (!c) c = this.chans.set(ev.ch, { def: null, k: ev.k, first: ev, cur: ev }).get(ev.ch)
+      else if (c.k !== ev.k) return // el tipo de un canal no cambia nunca
+      if (!c.first || cmp(ev, c.first) < 0) c.first = ev
+      if (!c.cur || cmp(c.cur, ev) < 0) c.cur = ev
+    } else if (ev.t === 'pin') {
+      const cur = this.pins.get(ev.x)
+      if (!cur || cmp(cur, ev) < 0) this.pins.set(ev.x, ev)
+    } else if (ev.t === 'emb') {
+      if (ev.x.startsWith(ev.a + ':')) { // solo el autor del mensaje añade su vista previa
+        const cur = this.embeds.get(ev.x)
+        if (!cur || ev.n > cur.n) this.embeds.set(ev.x, ev)
       }
     } else if (ev.t === 'edit') {
       if (ev.x.startsWith(ev.a + ':')) { // solo puedes editar lo tuyo
@@ -170,8 +219,49 @@ class Store {
       if (!cur || ev.n > cur.n) byUser.set(ev.a, { on: ev.on, n: ev.n })
     } else if (ev.t === 'prof') {
       const cur = this.names.get(ev.a)
-      if (!cur || ev.n > cur.n) this.names.set(ev.a, { name: ev.name, n: ev.n })
+      if (!cur || ev.n > cur.n) this.names.set(ev.a, { name: ev.name, av: ev.av || null, avs: ev.avs || 0, n: ev.n })
     }
+  }
+
+  _place(list, ev) {
+    let i = list.length
+    while (i > 0 && cmp(list[i - 1], ev) > 0) i--
+    list.splice(i, 0, ev)
+  }
+
+  _thread(x, y) {
+    const k = x < y ? `${x}:${y}` : `${y}:${x}`
+    return this.dms.get(k) || this.dms.set(k, []).get(k)
+  }
+
+  /** Canales vigentes: los predefinidos primero y luego los creados, por antigüedad. */
+  channels() {
+    const out = []
+    for (const [id, c] of this.chans) {
+      if (c.cur?.del) continue
+      const base = c.def || {}
+      out.push({
+        id, type: c.k, name: c.cur?.name || base.name, ...(base.topic ? { topic: base.topic } : {}),
+        _o: c.def ? CHANNELS.indexOf(c.def) - 1e6 : c.first.ts
+      })
+    }
+    return out.sort((a, b) => a._o - b._o || (a.id < b.id ? -1 : 1)).map(({ _o, ...c }) => c)
+  }
+
+  channel(id) { return this.channels().find((c) => c.id === id) || null }
+
+  /** Mensajes directos entre dos usuarios (cifrados), ordenados. */
+  dmThread(x, y) { return this.dms.get(x < y ? `${x}:${y}` : `${y}:${x}`) || [] }
+
+  /** Con quién tiene conversaciones `me`, con el último mensaje de cada una. */
+  dmPeers(me) {
+    const out = new Map()
+    for (const list of this.dms.values()) {
+      const last = list[list.length - 1]
+      if (!last || (last.a !== me && last.to !== me)) continue
+      out.set(last.a === me ? last.to : last.a, last)
+    }
+    return out
   }
 
   vector() {
@@ -220,6 +310,10 @@ class Store {
         .filter((r) => r.users.length)
       if (list.length) out.reactions = list
     }
+    const pin = this.pins.get(id)
+    if (pin?.on) { out.pinned = true; out.pinnedBy = pin.a }
+    const emb = this.embeds.get(id)
+    if (emb) out.emb = { url: emb.url, title: emb.title, desc: emb.desc, site: emb.site }
     if (ev.re) {
       const t = this.events.get(ev.re)
       out.reply = t && t.t === 'msg' && !this.deleted.has(ev.re)
@@ -252,6 +346,42 @@ class Store {
     return list.slice(Math.max(0, end - limit), end).map((e) => this.decorate(e))
   }
 
+  /** Ventana de mensajes alrededor de uno (para saltar a un resultado de búsqueda o a un fijado). tail = incluye el último. */
+  around(ch, id, { before = 30, after = 300 } = {}) {
+    const list = this.chan.get(ch) || []
+    const i = list.findIndex((e) => idOf(e) === id)
+    if (i < 0) return null
+    const end = Math.min(list.length, i + after + 1)
+    return { msgs: list.slice(Math.max(0, i - before), end).map((e) => this.decorate(e)), tail: end === list.length }
+  }
+
+  /** Mensajes fijados de un canal, el último fijado primero. */
+  pinned(ch) {
+    const out = []
+    for (const [id, p] of this.pins) {
+      const ev = p.on && !this.deleted.has(id) ? this.events.get(id) : null
+      if (ev && ev.t === 'msg' && ev.ch === ch) out.push([p, ev])
+    }
+    return out.sort((a, b) => cmp(b[0], a[0])).map(([, ev]) => this.decorate(ev))
+  }
+
+  /** Búsqueda de texto (sin distinguir mayúsculas ni acentos) en los canales de texto vigentes; lo más reciente primero. */
+  search(query, { ch = null, limit = 40 } = {}) {
+    const fold = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const words = fold(String(query || '')).split(/\s+/).filter(Boolean).slice(0, 8)
+    if (!words.length) return []
+    const live = new Set(this.channels().filter((c) => c.type === 'text').map((c) => c.id))
+    const hits = []
+    for (const [id, list] of this.chan) {
+      if (!live.has(id) || (ch && id !== ch)) continue
+      for (const ev of list) {
+        const text = fold((this.edits.get(idOf(ev))?.text ?? ev.text) + ' ' + (ev.att || []).map((a) => a.name).join(' '))
+        if (words.every((w) => text.includes(w))) hits.push(ev)
+      }
+    }
+    return hits.sort((a, b) => cmp(b, a)).slice(0, limit).map((e) => this.decorate(e))
+  }
+
   last(ch) {
     const list = this.chan.get(ch) || []
     return list.length ? list[list.length - 1] : null
@@ -260,6 +390,7 @@ class Store {
   /** Mensajes con adjuntos cuyos blobs podrían faltar. */
   *attachments() {
     for (const list of this.chan.values()) for (const ev of list) if (ev.att) for (const a of ev.att) yield a
+    for (const v of this.names.values()) if (v.av) yield { h: v.av, size: v.avs, mime: 'image/webp', name: 'avatar' }
   }
 
   /** Autores conocidos con su nombre más reciente. */
@@ -271,4 +402,4 @@ class Store {
   }
 }
 
-module.exports = { Store, cleanEvent, idOf }
+module.exports = { Store, cleanEvent, idOf, cleanChannelName, CHAN_ID }

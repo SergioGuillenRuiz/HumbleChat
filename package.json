@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "start": "node scripts/ensure-key.js && electron .",
-    "test": "node --test test/core.test.js",
+    "test": "node --test test/core.test.js test/content.test.js",
     "test:e2e": "node test/e2e.js",
     "dist:win": "node scripts/build.js win",
     "dist:linux": "node scripts/build.js linux",

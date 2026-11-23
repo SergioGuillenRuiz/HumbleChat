@@ -16,7 +16,8 @@ export const state = {
   status: { state: 'connecting', peers: 0 },
   platform: 'linux',
   pickerNeeded: true,
-  limits: { blob: 16 * 1024 * 1024, attachments: 6, text: 4000, name: 32 },
+  limits: { blob: 64 * 1024 * 1024, autoBlob: 16 * 1024 * 1024, avatar: 256 * 1024, attachments: 6, text: 4000, name: 32, channelName: 24 },
+  dms: new Map(), // id del amigo -> marca de tiempo del último mensaje directo (0 = conversación recién abierta)
   iceServers: [],
   view: { ch: 'general' }, // canal que se muestra en el panel central
   unread: new Set(),
@@ -35,7 +36,10 @@ export const state = {
   notify: { desktop: store('notifyDesktop') !== false, sounds: store('notifySounds') !== false }
 }
 
-export const channel = (id) => state.channels.find((c) => c.id === id)
+/** Un canal, o (para "dm:<id>") una conversación directa con la misma forma que un canal de texto. */
+export const channel = (id) => (typeof id === 'string' && id.startsWith('dm:')
+  ? { id, type: 'dm', peer: id.slice(3), name: member(id.slice(3)).name }
+  : state.channels.find((c) => c.id === id))
 export const member = (id) => state.byId.get(id) || { id, name: 'Amigo ' + id.slice(0, 4), online: false }
 
 export function setMembers(list) {

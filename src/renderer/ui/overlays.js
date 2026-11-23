@@ -55,6 +55,41 @@ export function confirmModal({ title, body, confirm = 'Aceptar', danger = false 
   })
 }
 
+// ───────────── Crear / editar un canal ─────────────
+/**
+ * @param {{channel?: {id,type,name}, kind?: 'text'|'voice'}} o  con `channel` se edita; sin él se crea uno de tipo `kind`.
+ * @returns {Promise<{kind, name}|{remove: true}|null>}
+ */
+export function openChannelModal({ channel = null, kind = 'text' } = {}) {
+  return new Promise((resolve) => {
+    const { el, close } = layer('modal-bg')
+    let done = false
+    const finish = (v) => { if (done) return; done = true; close(); resolve(v) }
+    el.addEventListener('dismiss', () => finish(null))
+    el.addEventListener('mousedown', (e) => { if (e.target === el) finish(null) })
+    let k = channel ? channel.type : kind
+    const input = h('input.text', { value: channel?.name || '', maxLength: state.limits.channelName, spellcheck: false, placeholder: 'nuevo-canal' })
+    const kinds = h('div.kind-pick')
+    const drawKinds = () => kinds.replaceChildren(...[['text', 'hash', 'Texto', 'Mensajes, imágenes y archivos'], ['voice', 'speaker', 'Voz', 'Charla, vídeo y pantalla']].map(([id, ic, label, help]) =>
+      h('button.kind' + (id === k ? '.active' : ''), { onclick: () => { k = id; drawKinds(); input.placeholder = id === 'text' ? 'nuevo-canal' : 'Nueva sala' } },
+        icon(ic, 24), h('div', h('b', label), h('small', help)))))
+    drawKinds()
+    const go = () => { if (input.value.trim()) finish({ kind: k, name: input.value }) }
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go() } })
+    el.append(h('div.modal',
+      h('div.modal-body',
+        h('h2', channel ? 'Editar canal' : 'Crear canal'),
+        !channel && h('label.field', 'Tipo de canal', kinds),
+        h('label.field', 'Nombre del canal', input)),
+      h('div.modal-foot',
+        channel && h('button.btn.danger.left', { onclick: () => finish({ remove: true }) }, 'Eliminar canal'),
+        h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'),
+        h('button.btn.brand', { onclick: go }, channel ? 'Guardar' : 'Crear canal'))))
+    input.focus()
+    input.select()
+  })
+}
+
 // ───────────── Compartir pantalla: qué y con qué calidad ─────────────
 const SHARE_PRESETS = [['fluid', 'Fluidez', '1080p · 60 fps · para juegos y vídeo'], ['sharp', 'Nitidez', '1080p · 30 fps · para texto y código']]
 
@@ -186,6 +221,18 @@ async function buildReport(voice) {
   return out.join('\n')
 }
 
+/** Recorta al centro y reduce a 256 px (WebP) para que el avatar pese unos pocos KB. */
+async function squareAvatar(file) {
+  const bmp = await createImageBitmap(file).catch(() => { throw new Error('No se pudo leer esa imagen.') })
+  const side = Math.min(bmp.width, bmp.height)
+  const c = new OffscreenCanvas(256, 256)
+  c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 256, 256)
+  bmp.close?.()
+  const blob = await c.convertToBlob({ type: 'image/webp', quality: 0.86 })
+  if (blob.size > state.limits.avatar) throw new Error('La imagen pesa demasiado.')
+  return await blob.arrayBuffer()
+}
+
 export function openSettings(voice, startTab = 'account') {
   const { el, close } = layer('settings')
   let tab = startTab
@@ -218,9 +265,24 @@ export function openSettings(voice, startTab = 'account') {
       }
     }, 'Guardar')
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click() })
+    const file = h('input', { type: 'file', accept: 'image/*', hidden: true })
+    file.addEventListener('change', async () => {
+      const f = file.files[0]
+      file.value = ''
+      if (!f) return
+      try {
+        await window.humble.setAvatar(await squareAvatar(f))
+        toast('Avatar actualizado', 'ok')
+        render()
+      } catch (e) { toast(e.message || 'No se pudo usar esa imagen.', 'warn') }
+    })
+    const mine = state.byId.get(state.me.id) || state.me
     return h('div',
       h('h2', 'Mi cuenta'),
-      h('div.card.profile', avatar(state.me, 80), h('div', h('div.big', state.me.name), h('div.muted', 'Tu nombre es lo que ven tus amigos'))),
+      h('div.card.profile', avatar(mine, 80),
+        h('div', h('div.big', state.me.name), h('div.muted', 'Tu nombre y tu avatar es lo que ven tus amigos'),
+          h('div.row.tight', h('button.btn.brand.small', { onclick: () => file.click() }, 'Cambiar avatar'),
+            mine.av && h('button.btn.link.small', { onclick: async () => { await window.humble.setAvatar(null); render() } }, 'Quitar')), file)),
       h('label.field', 'Nombre de usuario', h('div.row', input, save)),
       h('p.muted', 'No hay cuentas ni contraseñas: tu identidad es una clave que se crea sola en este equipo.')
     )
@@ -483,7 +545,7 @@ export function openSettings(voice, startTab = 'account') {
       sw('Seguir en la bandeja al cerrar la ventana', 'La aplicación (y tu llamada) sigue abierta; se sale desde el icono de la bandeja. Solo si tu escritorio tiene bandeja.', 'tray'),
       sw('Iniciar con el sistema', 'Se abre sola al encender el ordenador, en segundo plano.', 'autostart'),
       sw('Buscar actualizaciones', 'Avisa o instala las versiones nuevas. Solo consulta las publicaciones públicas del proyecto.', 'updates'),
-      sw('Vistas previas de enlaces', 'Al enviar un enlace, se añade su título e imagen para todos. Tu equipo visita la página una vez.', 'linkPreviews'),
+      sw('Vistas previas de enlaces', 'Al enviar un enlace, se añade su título y descripción para todos. Solo tu equipo visita la página, una vez.', 'linkPreviews'),
       h('div.sw-row', h('div', h('div.sw-label', 'Versión ' + state.version), h('div.muted', 'Comprueba si hay una versión nueva ahora mismo.')),
         h('button.btn.secondary.small', { onclick: () => { window.humble.updateCheck(); toast('Buscando actualizaciones…') } }, 'Buscar ahora')))
   }

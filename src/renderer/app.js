@@ -25,9 +25,10 @@ async function boot() {
     pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers
   })
   setMembers(init.members)
-  for (const c of state.channels) {
-    const last = init.last[c.id]
-    if (last && last.a !== state.me.id && last.ts > (state.lastRead[c.id] || firstRun)) state.unread.add(c.id)
+  for (const peer of init.dms || []) state.dms.set(peer, init.last['dm:' + peer]?.ts || 0)
+  for (const id of [...state.channels.map((c) => c.id), ...[...state.dms.keys()].map((p) => 'dm:' + p)]) {
+    const last = init.last[id]
+    if (last && last.a !== state.me.id && last.ts > (state.lastRead[id] || firstRun)) state.unread.add(id)
   }
   state.view.ch = state.channels.find((c) => c.type === 'text')?.id
 
@@ -100,7 +101,8 @@ function showUpdate(u) {
 
 function onView() {
   const c = channel(state.view.ch)
-  const isText = c.type === 'text'
+  if (!c) { state.view.ch = state.channels.find((x) => x.type === 'text')?.id; return state.view.ch && onView() }
+  const isText = c.type !== 'voice' // texto o conversación directa
   $('#chat').classList.toggle('hidden', !isText)
   $('#voiceview').classList.toggle('hidden', isText)
   if (isText) {
@@ -121,6 +123,14 @@ function onMessage(msg) {
       state.me.name = state.byId.get(state.me.id)?.name || state.me.name
       return voice.sync()
     case 'status': state.status = msg.status; return bus.emit('status')
+    case 'channels': {
+      state.channels = msg.channels
+      for (const id of [...state.unread]) if (!id.startsWith('dm:') && !channel(id)) state.unread.delete(id)
+      if (state.voice && !channel(state.voice.ch)) voice.leave()
+      bus.emit('channels')
+      bus.emit('view') // si el canal que mirabas ya no existe, onView te lleva a otro
+      return bus.emit('unread')
+    }
     case 'signal': return voice.onSignal(msg.from, msg.data)
     case 'toggleMute': return state.voice && voice.toggleMute()
     case 'ptt': return voice.setPtt(msg.down)
@@ -131,13 +141,18 @@ function onMessage(msg) {
 
 function onEvents(evs, updates) {
   onEventsChat(evs, updates)
-  for (const ev of evs) notifyFor(ev)
+  let dmsChanged = false
+  for (const ev of evs) {
+    if (ev.dm) { state.dms.set(ev.ch.slice(3), Math.max(state.dms.get(ev.ch.slice(3)) || 0, ev.ts)); dmsChanged = true }
+    notifyFor(ev)
+  }
+  if (dmsChanged) bus.emit('dms')
 }
 
 function notifyFor(ev) {
   if (ev.t !== 'msg' || ev.a === state.me.id) return
   const viewing = state.view.ch === ev.ch && document.hasFocus()
-  const mentioned = ev.text.includes(`<@${state.me.id}>`)
+  const mentioned = ev.dm || ev.text.includes(`<@${state.me.id}>`) // un mensaje directo siempre cuenta como aviso
   if (!viewing && ev.ts > (state.lastRead[ev.ch] || firstRun)) {
     let changed = false
     if (!state.unread.has(ev.ch)) { state.unread.add(ev.ch); changed = true }
@@ -147,8 +162,9 @@ function notifyFor(ev) {
   if (viewing || Date.now() - ev.ts > 30000) return // no avisar del historial que llega al sincronizar
   if (state.notify.desktop) {
     const who = state.byId.get(ev.a)?.name || 'Alguien'
-    const body = (ev.text || '📷 Imagen').replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + (state.byId.get(id)?.name || ''))
-    window.humble.notify({ title: `${who} · #${channel(ev.ch).name}`, body, ch: ev.ch }).catch(() => {})
+    const body = (ev.text || '📎 Archivo').replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + (state.byId.get(id)?.name || ''))
+    const where = ev.dm ? 'mensaje directo' : '#' + (channel(ev.ch)?.name || '')
+    window.humble.notify({ title: `${who} · ${where}`, body, ch: ev.ch }).catch(() => {})
   }
   if (state.notify.sounds && (mentioned || !document.hasFocus())) play('message')
 }

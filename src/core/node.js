@@ -15,19 +15,20 @@ const path = require('path')
 const fs = require('fs')
 const Hyperswarm = require('hyperswarm')
 const DHT = require('hyperdht')
-const { CHANNELS, LIMITS, PROTOCOL } = require('./constants')
+const { LIMITS, PROTOCOL } = require('./constants')
 const { encodeJSON, encodeBlob, Decoder } = require('./frames')
 const { loadIdentity } = require('./identity')
-const { Store, cleanEvent } = require('./store')
+const { Store, cleanEvent, cleanChannelName, CHAN_ID } = require('./store')
+const dmcrypto = require('./dmcrypto')
 const { Blobs } = require('./blobs')
 const { topicOf, proofOf } = require('./groupkey')
 const { sign } = require('./sign')
 
 const HEX64 = /^[0-9a-f]{64}$/
-const VOICE_IDS = new Set(CHANNELS.filter((c) => c.type === 'voice').map((c) => c.id))
 
+// Un canal de voz puede ser nuevo para nosotros (su evento aún no ha llegado): basta con que el id sea válido.
 function cleanVoice(v) {
-  if (!v || typeof v !== 'object' || !VOICE_IDS.has(v.ch)) return null
+  if (!v || typeof v !== 'object' || typeof v.ch !== 'string' || !CHAN_ID.test(v.ch)) return null
   return { ch: v.ch, mute: !!v.mute, deaf: !!v.deaf, share: !!v.share, cam: !!v.cam }
 }
 
@@ -37,6 +38,9 @@ function cleanVector(v) {
   for (const [a, n] of Object.entries(v)) if (HEX64.test(a) && Number.isInteger(n) && n > 0) out[a] = n
   return out
 }
+
+/** Imágenes de tamaño razonable y avatares: se descargan solas. Lo demás, cuando alguien lo pide. */
+const isAuto = (a) => /^image\//.test(a.mime || 'image/') && a.size <= LIMITS.autoBlob
 
 class Peer {
   constructor(node, conn) {
@@ -119,7 +123,7 @@ class ChatNode extends EventEmitter {
     this.blobs = new Blobs(path.join(this.dir, 'blobs'))
     this.lastTs = 0
 
-    if (this.store.names.get(this.id)?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name })
+    if (this.store.names.get(this.id)?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name, ...this._avatarFields() })
 
     // Nodos de la DHT conocidos de la última vez: permiten arrancar aunque los nodos de arranque públicos no respondan.
     this.nodesFile = path.join(this.dir, 'dht-nodes.json')
@@ -209,6 +213,7 @@ class ChatNode extends EventEmitter {
       out.push({
         id,
         name: (me ? this.name : this.store.names.get(id)?.name || peer?.name) || 'Amigo ' + id.slice(0, 4),
+        av: this.store.names.get(id)?.av || null,
         online: me || !!peer,
         voice: me ? this.voice : peer ? peer.voice : null
       })
@@ -228,12 +233,14 @@ class ChatNode extends EventEmitter {
   }
 
   snapshot() {
+    const channels = this.store.channels()
     const last = {}
-    for (const c of CHANNELS) if (c.type === 'text') {
+    for (const c of channels) if (c.type === 'text') {
       const ev = this.store.last(c.id)
       last[c.id] = ev ? { ts: ev.ts, a: ev.a } : null
     }
-    return { me: { id: this.id, name: this.name }, members: this._members(), status: this.status(), last }
+    for (const [peer, ev] of this.store.dmPeers(this.id)) last['dm:' + peer] = { ts: ev.ts, a: ev.a }
+    return { me: { id: this.id, name: this.name }, members: this._members(), status: this.status(), channels, last, dms: [...this.store.dmPeers(this.id).keys()] }
   }
 
   history(ch, opts) { return this.store.history(ch, opts) }
@@ -291,8 +298,79 @@ class ChatNode extends EventEmitter {
 
   /** "Está escribiendo…": efímero, solo a los conectados directamente. */
   typing(ch) {
-    if (CHANNELS.some((c) => c.id === ch && c.type === 'text')) this._broadcast({ t: 'typ', ch })
+    if (typeof ch === 'string' && CHAN_ID.test(ch)) this._broadcast({ t: 'typ', ch })
   }
+
+  // ── canales ──
+  createChannel(kind, name) {
+    const n = cleanChannelName(kind, name)
+    if (!n) throw new Error('Ese nombre de canal no es válido.')
+    if (this.store.channels().length >= LIMITS.channels) throw new Error('Ya hay demasiados canales.')
+    const id = 'c' + crypto.randomBytes(5).toString('hex')
+    this._author({ t: 'chan', ch: id, k: kind, name: n, del: false })
+    return id
+  }
+
+  renameChannel(id, name) {
+    const c = this.store.channel(id)
+    const n = c && cleanChannelName(c.type, name)
+    if (!c || !n) throw new Error('Ese nombre de canal no es válido.')
+    if (n !== c.name) this._author({ t: 'chan', ch: id, k: c.type, name: n, del: false })
+  }
+
+  deleteChannel(id) {
+    const c = this.store.channel(id)
+    if (!c) return
+    if (c.type === 'text' && this.store.channels().filter((x) => x.type === 'text').length < 2) throw new Error('Tiene que quedar al menos un canal de texto.')
+    this._author({ t: 'chan', ch: id, k: c.type, name: c.name, del: true })
+  }
+
+  // ── fijados, avatar y vistas previas ──
+  pin(id, on) {
+    if (!this.store.message(id)) return null
+    return this._author({ t: 'pin', x: id, on: !!on })
+  }
+
+  /** Vista previa de un enlace de un mensaje propio (la obtiene quien lo envía, nunca el que lo recibe). */
+  embed(id, { url, title, desc, site }) {
+    const t = this.store.events.get(id)
+    if (!t || t.t !== 'msg' || t.a !== this.id || this.store.deleted.has(id)) return null
+    return this._author({ t: 'emb', x: id, url, title: title || '', desc: desc || '', site: site || '' })
+  }
+
+  /** `bytes` ya viene reducido (cuadrado, WebP); null quita el avatar. */
+  setAvatar(bytes) {
+    if (!bytes) { this._author({ t: 'prof', name: this.name }); return null }
+    if (bytes.length > LIMITS.avatar) throw new Error('El avatar pesa demasiado.')
+    const { h, size } = this.blobs.put(Buffer.from(bytes))
+    this._author({ t: 'prof', name: this.name, av: h, avs: size })
+    return h
+  }
+
+  // ── mensajes directos ──
+  dm(to, text) {
+    text = String(text ?? '')
+    if (!HEX64.test(to) || to === this.id) throw new Error('Destinatario no válido.')
+    if (!text.trim() || text.length > LIMITS.text) throw new Error('Mensaje no válido.')
+    return this._author({ t: 'dm', to, box: dmcrypto.seal(this.identity.keyPair.secretKey, to, text) })
+  }
+
+  /** Un mensaje directo descifrado con la forma de un mensaje de canal (ch = "dm:<otro>"), o null si no es para nosotros. */
+  openDm(ev) {
+    if (ev.t !== 'dm' || (ev.a !== this.id && ev.to !== this.id)) return null
+    const peer = ev.a === this.id ? ev.to : ev.a
+    const text = dmcrypto.open(this.identity.keyPair.secretKey, peer, ev.box)
+    return text === null ? null : { t: 'msg', ch: 'dm:' + peer, a: ev.a, n: ev.n, ts: ev.ts, text, dm: true }
+  }
+
+  dmHistory(peer, { beforeTs = null, beforeId = null, limit = 60 } = {}) {
+    if (!HEX64.test(peer)) return []
+    let list = this.store.dmThread(this.id, peer)
+    if (beforeTs !== null) list = list.filter((e) => e.ts < beforeTs || (e.ts === beforeTs && `${e.a}:${e.n}` < String(beforeId)))
+    return list.slice(-limit).map((e) => this.openDm(e)).filter(Boolean)
+  }
+
+  search(query, opts) { return this.store.search(query, opts) }
 
   remove(id) {
     if (typeof id !== 'string' || !id.startsWith(this.id + ':')) return null
@@ -301,8 +379,14 @@ class ChatNode extends EventEmitter {
 
   setName(name) {
     const n = this.identity.setName(name)
-    this._author({ t: 'prof', name: n })
+    this._author({ t: 'prof', name: n, ...this._avatarFields() })
     return n
+  }
+
+  // Nombre y avatar viajan en el mismo evento: cambiar uno conserva el otro.
+  _avatarFields() {
+    const cur = this.store.names.get(this.id)
+    return cur?.av ? { av: cur.av, avs: cur.avs } : {}
   }
 
   setVoice(v) {
@@ -319,18 +403,28 @@ class ChatNode extends EventEmitter {
 
   addBlob(buf, meta) {
     const { h, size } = this.blobs.put(buf)
-    return { h, size, name: String(meta.name || 'imagen').slice(0, 120), mime: meta.mime, w: meta.w, ht: meta.ht }
+    const name = String(meta.name || 'archivo').replace(/\p{Cc}/gu, '').slice(0, 120) || 'archivo'
+    return { h, size, name, mime: meta.mime, w: meta.w, ht: meta.ht }
   }
 
-  /** Ruta local de un adjunto; si falta lo pide a los demás y espera. */
+  /** Ruta local de un adjunto; si falta lo pide a los demás (reintentando) y espera. */
   whenBlob(h, timeout = 20000) {
     if (this.blobs.has(h)) return Promise.resolve(this.blobs.path(h))
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => { this.off('blob', onBlob); reject(new Error('timeout')) }, timeout)
-      const onBlob = (got) => { if (got === h) { clearTimeout(t); this.off('blob', onBlob); resolve(this.blobs.path(h)) } }
+      const done = (fn, v) => { clearTimeout(t); clearInterval(retry); this.off('blob', onBlob); fn(v) }
+      const t = setTimeout(() => done(reject, new Error('timeout')), timeout)
+      const retry = setInterval(() => this._pumpBlobs(h), 3000)
+      const onBlob = (got) => { if (got === h) done(resolve, this.blobs.path(h)) }
       this.on('blob', onBlob)
       this._pumpBlobs(h)
     })
+  }
+
+  /** Avance de la descarga de un adjunto (para la barra de progreso). */
+  blobProgress(h) {
+    if (this.blobs.has(h)) return { done: true }
+    const r = this.blobs.receiving.get(h)
+    return { done: false, got: r?.got || 0, total: r?.total || this.wanted.get(h)?.size || 0 }
   }
 
   _broadcast(msg, except = null) {
@@ -401,7 +495,7 @@ class ChatNode extends EventEmitter {
         if (JSON.stringify(m.data ?? null).length < 64 * 1024) this.emit('signal', peer.id, m.data)
         return
       case 'typ':
-        if (CHANNELS.some((c) => c.id === m.ch && c.type === 'text')) this.emit('typing', peer.id, m.ch)
+        if (typeof m.ch === 'string' && CHAN_ID.test(m.ch)) this.emit('typing', peer.id, m.ch)
         return
       case 'bw': return this._onBlobWant(peer, m.h)
       case 'bmiss':
@@ -442,7 +536,10 @@ class ChatNode extends EventEmitter {
     if (!fresh.length) return
     // Reenvío en "flood": si algún vecino no nos conoce a todos, igualmente le llega.
     this._broadcast(fresh.length === 1 ? { t: 'ev', e: fresh[0] } : { t: 'evs', list: fresh }, peer)
-    for (const ev of fresh) if (ev.att) for (const a of ev.att) this._wantBlob(a, peer)
+    for (const ev of fresh) {
+      if (ev.att) for (const a of ev.att) if (isAuto(a)) this._wantBlob(a, peer)
+      if (ev.t === 'prof' && ev.av) this._wantBlob({ h: ev.av, size: ev.avs }, peer)
+    }
   }
 
   // ───────────────────────── adjuntos ─────────────────────────
@@ -460,7 +557,7 @@ class ChatNode extends EventEmitter {
     if (!peers.length) return
     let i = 0
     for (const att of this.store.attachments()) {
-      if (only && att.h !== only) continue
+      if (only ? att.h !== only : !isAuto(att)) continue // los archivos grandes o no imagen solo se bajan al pedirlos
       if (this.blobs.has(att.h) || this.wanted.has(att.h)) continue
       for (let k = 0; k < peers.length; k++) {
         const p = peers[(i + k) % peers.length]

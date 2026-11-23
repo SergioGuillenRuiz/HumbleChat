@@ -4,6 +4,7 @@ import { icon } from '../icons.js'
 import { state, member, channel, bus } from '../state.js'
 import { voice } from '../voice.js'
 import { openSettings } from './overlays.js'
+import { openDm } from './sidebar.js'
 
 export function openProfile(anchor, id) {
   document.querySelector('.profile-card')?.remove()
@@ -23,6 +24,7 @@ export function openProfile(anchor, id) {
       inVoice && h('div.pc-section', h('div.pc-title', 'En llamada'),
         h('div.pc-voice', icon('speaker', 18), h('span', inVoice.name),
           !joined && h('button.btn.green.small', { onclick: () => { card.remove(); voice.join(inVoice.id); state.view.ch = inVoice.id; bus.emit('view') } }, 'Unirse'))),
+      !isMe && h('button.btn.brand.wide', { onclick: () => { card.remove(); openDm(id) } }, 'Enviar mensaje'),
       isMe && h('button.btn.secondary.wide', { onclick: () => { card.remove(); openSettings(voice) } }, 'Editar perfil'),
       !isMe && !inVoice && h('div.pc-muted', m.online ? 'Conectado, sin llamada.' : 'Se ha ido por ahora. Verá lo que escribas cuando vuelva.')))
   document.body.append(card)

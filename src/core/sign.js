@@ -3,7 +3,7 @@
 // quien tenga la llave del grupo o retransmita mensajes, puede suplantar a otro ni alterar lo que dijo.
 const sodium = require('sodium-native')
 
-const DOMAIN = 'humblechat/event/v3'
+const DOMAIN = 'humblechat/event/v4'
 const HEX128 = /^[0-9a-f]{128}$/
 
 /** Serialización canónica: un array con orden fijo (no depende del orden de las claves del objeto). */
@@ -14,7 +14,11 @@ function canon(ev) {
   } else if (ev.t === 'del') base.push(ev.x)
   else if (ev.t === 'edit') base.push(ev.x, ev.text)
   else if (ev.t === 'react') base.push(ev.x, ev.e, ev.on ? 1 : 0)
-  else if (ev.t === 'prof') base.push(ev.name)
+  else if (ev.t === 'prof') base.push(ev.name, ev.av ?? null, ev.avs ?? 0)
+  else if (ev.t === 'chan') base.push(ev.ch, ev.k, ev.name, ev.del ? 1 : 0)
+  else if (ev.t === 'pin') base.push(ev.x, ev.on ? 1 : 0)
+  else if (ev.t === 'emb') base.push(ev.x, ev.url, ev.title, ev.desc, ev.site)
+  else if (ev.t === 'dm') base.push(ev.to, ev.box)
   return Buffer.from(JSON.stringify(base))
 }
 

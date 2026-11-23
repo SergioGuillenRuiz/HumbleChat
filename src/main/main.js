@@ -11,7 +11,8 @@ const { startUpdates } = require('./updates')
 const { trayHostAvailable, createTray } = require('./tray')
 const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
-const { CHANNELS, SERVER_NAME, LIMITS } = require('../core/constants')
+const { SERVER_NAME, LIMITS } = require('../core/constants')
+const { fetchPreview, extractUrl } = require('../core/linkpreview')
 
 const ROOT = path.join(__dirname, '..', '..')
 const RENDERER = path.join(__dirname, '..', 'renderer')
@@ -146,12 +147,16 @@ async function startNode(key) {
     const list = batch
     batch = []
     const evs = []
-    const touched = new Set() // mensajes cuya edición/reacciones han cambiado
+    const touched = new Set() // mensajes cuya edición/reacciones/fijado/vista previa han cambiado
+    let channelsChanged = false
     for (const ev of list) {
       if (ev.t === 'msg') evs.push(node.store.decorate(ev))
-      else if (ev.t === 'edit' || ev.t === 'react') touched.add(ev.x)
+      else if (ev.t === 'dm') { const d = node.openDm(ev); if (d) evs.push(d) } // solo los que son para nosotros, ya descifrados
+      else if (ev.t === 'edit' || ev.t === 'react' || ev.t === 'pin' || ev.t === 'emb') touched.add(ev.x)
+      else if (ev.t === 'chan') channelsChanged = true
       else evs.push(ev)
     }
+    if (channelsChanged) send('channels', { channels: node.store.channels() })
     const fresh = new Set(evs.filter((e) => e.t === 'msg').map((e) => `${e.a}:${e.n}`))
     const updates = [...touched].filter((id) => !fresh.has(id)).map((id) => node.store.message(id)).filter(Boolean)
     send('events', { evs, updates })
@@ -161,6 +166,16 @@ async function startNode(key) {
   node.on('status', (status) => send('status', { status }))
   node.on('signal', (from, data) => send('signal', { from, data }))
   await node.start()
+}
+
+/** Vista previa del primer enlace de un mensaje propio: se pide desde aquí (nunca desde los demás) y se reparte firmada. */
+async function previewFor(ev) {
+  const url = extractUrl(ev.text)
+  if (!url) return
+  try {
+    const meta = await fetchPreview(url, process.env.HUMBLECHAT_TEST_PREVIEW ? { allowPrivate: true } : {})
+    if (meta && node) node.embed(`${ev.a}:${ev.n}`, meta)
+  } catch {}
 }
 
 // ───────────── Ventana ─────────────
@@ -322,8 +337,7 @@ function setupIpc() {
     return {
       ...node.snapshot(),
       server: SERVER_NAME,
-      channels: CHANNELS,
-      limits: { blob: LIMITS.blob, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name },
+      limits: { blob: LIMITS.blob, autoBlob: LIMITS.autoBlob, avatar: LIMITS.avatar, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name, channelName: LIMITS.channelName },
       iceServers: network.iceServers,
       platform: process.env.HUMBLECHAT_FAKE_PLATFORM || process.platform, // solo pruebas: ver la barra de título de Windows
       pickerNeeded: !IS_WAYLAND, // en Wayland ya pregunta el portal del sistema
@@ -332,8 +346,26 @@ function setupIpc() {
       room: { fingerprint: fingerprint(currentKey) }
     }
   })
-  handle('history', (_e, ch, opts) => (typeof ch === 'string' ? node.history(ch, opts || {}) : []))
-  handle('send', (_e, m) => node.send(m.ch, m.text, m.att, m.re))
+  handle('history', (_e, ch, opts) => {
+    if (typeof ch !== 'string') return []
+    return ch.startsWith('dm:') ? node.dmHistory(ch.slice(3), opts || {}) : node.history(ch, opts || {})
+  })
+  handle('send', (_e, m) => {
+    const ev = node.send(m.ch, m.text, m.att, m.re)
+    if (settings.get('linkPreviews')) previewFor(ev)
+    return ev
+  })
+  handle('dm:send', (_e, to, text) => node.openDm(node.dm(to, text)))
+  handle('around', (_e, ch, id) => (typeof ch === 'string' && typeof id === 'string' ? node.store.around(ch, id) : null))
+  handle('pinned', (_e, ch) => node.store.pinned(String(ch)))
+  handle('pin', (_e, id, on) => node.pin(String(id), !!on))
+  handle('search', (_e, q, ch) => node.search(String(q || '').slice(0, 200), { ch: typeof ch === 'string' ? ch : null }))
+  handle('channel:create', (_e, kind, name) => node.createChannel(kind === 'voice' ? 'voice' : 'text', name))
+  handle('channel:rename', (_e, id, name) => node.renameChannel(String(id), name))
+  handle('channel:delete', (_e, id) => node.deleteChannel(String(id)))
+  handle('avatar:set', (_e, data) => node.setAvatar(data ? Buffer.from(data) : null))
+  handle('blob:fetch', (_e, hash) => /^[0-9a-f]{64}$/.test(hash) ? node.whenBlob(hash, 10 * 60 * 1000).then(() => true) : false)
+  handle('blob:progress', (_e, hash) => (/^[0-9a-f]{64}$/.test(hash) ? node.blobProgress(hash) : { done: false, got: 0, total: 0 }))
   handle('edit', (_e, id, text) => node.edit(id, text))
   handle('react', (_e, id, emoji, on) => node.react(id, emoji, on))
   handle('typing', (_e, ch) => node.typing(ch))
@@ -342,7 +374,7 @@ function setupIpc() {
   handle('setVoice', (_e, v) => node.setVoice(v))
   handle('signal', (_e, to, data) => node.signal(to, data))
   handle('addBlob', (_e, { data, name, mime, w, ht }) => {
-    if (!/^image\/(png|jpeg|gif|webp|avif|bmp)$/.test(mime)) throw new Error('Solo se pueden enviar imágenes')
+    if (typeof mime !== 'string' || !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i.test(mime) || mime.length > 80) mime = 'application/octet-stream'
     return node.addBlob(Buffer.from(data), { name, mime, w, ht })
   })
   handle('saveBlob', async (_e, hash, name) => {

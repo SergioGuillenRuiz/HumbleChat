@@ -13,13 +13,17 @@ const CHANNELS = [
 const LIMITS = {
   text: 4000, // caracteres por mensaje
   name: 32, // caracteres por nombre
+  channelName: 24, // caracteres por nombre de canal
+  channels: 40, // canales como máximo (texto + voz)
   attachments: 6, // adjuntos por mensaje
-  blob: 16 * 1024 * 1024, // bytes por imagen
+  blob: 64 * 1024 * 1024, // bytes por archivo
+  autoBlob: 16 * 1024 * 1024, // las imágenes hasta este tamaño se descargan solas; el resto, al pedirlas
+  avatar: 256 * 1024, // bytes por avatar
   frame: 4 * 1024 * 1024, // bytes por trama de red
   blobChunk: 48 * 1024
 }
 
-const PROTOCOL = 3 // 2: eventos firmados · 3: editar, reaccionar y responder
+const PROTOCOL = 4 // 2: eventos firmados · 3: editar, reaccionar y responder · 4: canales, fijados, directos, avatares, vistas previas, archivos
 
 // Servidores STUN públicos para WebRTC (voz). No hay TURN: necesitaría un servidor.
 const ICE_SERVERS = [

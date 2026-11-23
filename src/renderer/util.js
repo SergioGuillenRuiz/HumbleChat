@@ -56,9 +56,15 @@ export function colorFor(id) {
 
 export function avatar(member, size = 40, extra = '') {
   const name = member?.name || '?'
-  return h('div.avatar' + (extra ? '.' + extra : ''), {
+  const el = h('div.avatar' + (extra ? '.' + extra : ''), {
     style: { width: size + 'px', height: size + 'px', background: colorFor(member?.id || name), fontSize: Math.round(size * 0.46) + 'px' }
   }, size >= 20 ? ([...name.trim()][0]?.toUpperCase() || '?') : '')
+  if (member?.av) { // foto de perfil encima de la inicial; si aún no ha llegado, se queda la inicial
+    const img = h('img.avatar-img', { src: `humble://blob/${member.av}?m=image/webp`, alt: '', draggable: false })
+    img.addEventListener('error', () => img.remove())
+    el.append(img)
+  }
+  return el
 }
 
 const pad = (n) => String(n).padStart(2, '0')

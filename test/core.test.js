@@ -186,7 +186,7 @@ test('el store rechaza basura y reordena por (ts, id); el decoder tolera trozos 
   const kp = DHT.keyPair()
   const A = kp.publicKey.toString('hex')
   const mk = (n, ts, fields) => { const e = { a: A, n, ts, ...fields }; e.sig = sign(kp.secretKey, e); return e }
-  assert.equal(s.add(mk(1, 5, { t: 'msg', ch: 'nope', text: 'x' })), 'bad')
+  assert.equal(s.add(mk(1, 5, { t: 'msg', ch: 'No Válido!', text: 'x' })), 'bad')
   assert.equal(s.add(mk(1, 5, { t: 'msg', ch: 'general', text: '' })), 'bad')
   assert.equal(s.add(mk(2, 3, { t: 'msg', ch: 'general', text: 'segundo' })), 'new')
   assert.deepEqual(s.vector(), {}) // hueco: falta n=1, el vector no avanza
