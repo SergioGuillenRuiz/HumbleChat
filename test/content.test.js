@@ -207,9 +207,13 @@ test('vistas previas: solo las añade el autor del mensaje, y solo con http(s)',
 
 test('búsqueda: sin mayúsculas ni acentos, usa el texto editado, ignora borrados y canales eliminados', async () => {
   const [a, b] = await pair()
+  const tick = () => new Promise((r) => setTimeout(r, 5)) // ts distintos: con el mismo milisegundo se desempata por id y el orden sería aleatorio
   const m1 = a.send('general', 'Reunión mañana a las 10')
+  await tick()
   a.send('general', 'compra pan')
+  await tick()
   b.send('fotos', 'foto de la reunion del viernes')
+  await tick()
   const m4 = a.send('general', 'texto original')
   await waitFor(() => b.history('general').length === 3, 5000, 'sincronizado')
   a.edit(idOf(m4), 'ahora dice PIÑATA')
