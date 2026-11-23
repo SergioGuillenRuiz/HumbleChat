@@ -1,0 +1,28 @@
+{
+  "name": "humblechat",
+  "productName": "HumbleChat",
+  "version": "0.1.0",
+  "description": "Chat de texto y voz privado para un grupo pequeño de amigos. Sin servidor, sin cuentas, sin configuración.",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "author": "HumbleChat",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/ensure-key.js && electron .",
+    "test": "node --test test/core.test.js",
+    "test:e2e": "node test/e2e.js",
+    "dist:win": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --win",
+    "dist:linux": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js --linux",
+    "dist": "node scripts/ensure-key.js && electron-builder --config electron-builder.config.js"
+  },
+  "dependencies": {
+    "hyperdht": "^6.21.0",
+    "hyperswarm": "^4.17.2"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "playwright": "~1.63.0"
+  },
+  "homepage": "https://github.com/SergioGuillenRuiz/HumbleChat"
+}
