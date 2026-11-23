@@ -4,6 +4,7 @@ import { state, bus } from './state.js'
 import { play, setSoundOutput } from './sounds.js'
 import { toast, openShareDialog } from './ui/overlays.js'
 import { store } from './util.js'
+import { codecOrder, hasHardwareH264 } from './codecs.js'
 
 const links = new Map() // id remoto -> Link
 // Relé de voz por un tercero cuando la conexión directa entre dos amigos falla (NAT estricto):
@@ -29,6 +30,8 @@ export const PRESETS = {
   sharp: { id: 'sharp', label: 'Nitidez', detail: '1080p · 30 fps', width: 1920, height: 1080, fps: 30, bitrate: 4_000_000, hint: 'detail', codecs: ['video/VP9', 'video/VP8'] }
 }
 let screenPreset = PRESETS.fluid
+let hwH264 = false
+hasHardwareH264().then((v) => { hwH264 = v })
 const dbg = () => store('dbg') || {} // ajustes de depuración (solo para medir): localStorage hc.dbg
 
 // ───────────── API pública ─────────────
@@ -239,7 +242,10 @@ function setPtt(down) {
 function applyMute() {
   const off = isMuted()
   gateTick()
-  for (const l of links.values()) l.audio.muted = !!state.voice?.deafened
+  for (const l of links.values()) {
+    l.audio.muted = !!state.voice?.deafened
+    if (l.screenAudio) l.screenAudio.muted = !!state.voice?.deafened || state.watching !== l.id
+  }
 }
 
 function toggleMute() {
@@ -337,6 +343,8 @@ class Link {
     this.viewer = false // ¿me ha pedido ver mi pantalla?
     this.screenSender = null
     this.camSender = null
+    this.screenAudioSender = null
+    this.screenAudio = null // reproductor del audio del sistema de quien comparte pantalla
     this.remoteCam = null // id del flujo de cámara y de pantalla del otro (para distinguir los vídeos)
     this.remoteScr = null
     this.unknown = []
@@ -421,6 +429,8 @@ class Link {
       const pending = this.unknown
       this.unknown = []
       for (const u of pending) this.classify(u.sid, u.track)
+      const ai = this.pendingAudio.findIndex((x) => x.stream.id === this.remoteScr)
+      if (this.remoteScr && ai >= 0) this.attachScreenAudio(this.pendingAudio.splice(ai, 1)[0].stream)
     } else if (m.k === 'w') {
       this.viewer = !!m.on
       this.syncScreen()
@@ -444,6 +454,7 @@ class Link {
     if (e.track.kind === 'audio') {
       const stream = e.streams[0] || new MediaStream([e.track])
       if (this.viaMap.has(stream.id)) return attachRelayed(this.viaMap.get(stream.id), stream, this.id)
+      if (this.remoteScr && stream.id === this.remoteScr) return this.attachScreenAudio(stream)
       if (this.audioSids.size && !this.audioSids.has(stream.id)) { // segundo flujo de audio: voz de otro, retransmitida
         const item = { stream }
         this.pendingAudio.push(item)
@@ -462,6 +473,16 @@ class Link {
     }
   }
 
+  /** Audio del sistema de quien comparte pantalla: suena solo mientras lo estás viendo. */
+  attachScreenAudio(stream) {
+    this.screenAudio ||= new Audio()
+    this.screenAudio.autoplay = true
+    this.screenAudio.srcObject = stream
+    this.screenAudio.muted = !!state.voice?.deafened || state.watching !== this.id
+    if (state.prefs.output && this.screenAudio.setSinkId) this.screenAudio.setSinkId(state.prefs.output).catch(() => {})
+    this.screenAudio.play().catch(() => {})
+  }
+
   /** ¿Cámara o pantalla? Lo dice el id del flujo, que el otro nos anuncia con {k:'s'}. */
   classify(sid, track) {
     if (sid && sid === this.remoteCam) state.cams.set(this.id, new MediaStream([track]))
@@ -476,7 +497,7 @@ class Link {
     if (camStream && !this.camSender) {
       this.camSender = this.pc.addTrack(camStream.getVideoTracks()[0], camStream)
       const tr = this.pc.getTransceivers().find((t) => t.sender === this.camSender)
-      if (tr) preferCodecs(tr, ['video/VP8'])
+      if (tr) preferCodecs(tr, codecOrder(['video/VP8'], hwH264))
       this.tune()
     } else if (!camStream && this.camSender) {
       const tr = this.pc.getTransceivers().find((t) => t.sender === this.camSender)
@@ -519,16 +540,22 @@ class Link {
       const track = screen.getVideoTracks()[0]
       if (!track) return
       this.screenSender = this.pc.addTrack(track, screen)
+      const at = screen.getAudioTracks()[0]
+      if (at) this.screenAudioSender = this.pc.addTrack(at, screen) // audio del sistema (opcional)
       const tr = this.pc.getTransceivers().find((t) => t.sender === this.screenSender)
-      if (tr) preferCodecs(tr, dbg().codec ? [dbg().codec] : screenPreset.codecs)
+      if (tr) preferCodecs(tr, dbg().codec ? [dbg().codec] : codecOrder(screenPreset.codecs, hwH264))
       for (const l of links.values()) l.tune() // el número de espectadores cambia la calidad de todos
     } else if (!want && this.screenSender) {
       // Se detiene el transceptor (no solo se quita la pista): al volver a compartir se crea un flujo nuevo con
       // su propio bitrate de arranque. Reutilizarlo dejaba el vídeo a ~1 fps durante minutos.
-      const tr = this.pc.getTransceivers().find((t) => t.sender === this.screenSender)
-      try { this.pc.removeTrack(this.screenSender) } catch {}
-      try { tr?.stop() } catch {}
+      for (const snd of [this.screenSender, this.screenAudioSender]) {
+        if (!snd) continue
+        const tr = this.pc.getTransceivers().find((t) => t.sender === snd)
+        try { this.pc.removeTrack(snd) } catch {}
+        try { tr?.stop() } catch {}
+      }
       this.screenSender = null
+      this.screenAudioSender = null
       queueMicrotask(() => { for (const l of links.values()) l.tune() })
     }
   }
@@ -614,6 +641,7 @@ class Link {
     this.pc.onnegotiationneeded = this.pc.onicecandidate = this.pc.ontrack = null
     this.pc.close()
     if (!relayedAudio.has(this.id)) this.audio.srcObject = null
+    if (this.screenAudio) this.screenAudio.srcObject = null
     meters.delete(this.id)
     state.streams.delete(this.id)
     state.cams.delete(this.id)
@@ -726,12 +754,13 @@ async function startShare() {
     const choice = await openShareDialog({ needSource: state.pickerNeeded })
     if (!choice) return
     screenPreset = PRESETS[choice.preset] || PRESETS.fluid
-    if (choice.id) await window.humble.chooseScreen(choice.id)
+    if (choice.id) await window.humble.chooseScreen(choice.id, choice.audio)
     const p = screenPreset
     screen = await navigator.mediaDevices.getDisplayMedia({
       video: { width: { ideal: p.width }, height: { ideal: p.height }, frameRate: { ideal: p.fps, max: p.fps } },
-      audio: false
+      audio: choice.audio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false, restrictOwnAudio: true } : false
     })
+    if (choice.audio && !screen.getAudioTracks().length) toast('No se pudo capturar el audio del sistema; se comparte solo la imagen.', 'warn')
   } catch (e) {
     screen = null
     console.warn('compartir pantalla:', e?.name, e?.message)
@@ -767,6 +796,7 @@ function watch(id) {
   if (prev && prev !== state.me.id) { links.get(prev)?.send({ k: 'w', on: false }); state.streams.delete(prev) }
   state.watching = id
   if (id && id !== state.me.id) links.get(id)?.send({ k: 'w', on: true })
+  for (const l of links.values()) if (l.screenAudio) l.screenAudio.muted = !!state.voice?.deafened || state.watching !== l.id
   bus.emit('streams')
 }
 
@@ -783,7 +813,7 @@ function setVolume(id, v) {
 
 async function applyDevices() {
   setSoundOutput(state.prefs.output)
-  for (const l of links.values()) if (l.audio.setSinkId) l.audio.setSinkId(state.prefs.output || '').catch(() => {})
+  for (const l of links.values()) for (const a of [l.audio, l.screenAudio]) if (a?.setSinkId) a.setSinkId(state.prefs.output || '').catch(() => {})
   if (state.voice && mic) await reacquireMic() // cambiar de micro en caliente
 }
 

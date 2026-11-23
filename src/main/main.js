@@ -56,6 +56,7 @@ let node = null
 let rendererReady = false
 let quitting = false
 let pendingScreenId = null
+let pendingAudio = false
 let settings = null
 let updates = null
 let tray = null
@@ -293,8 +294,10 @@ function setupSession() {
       // X11/Windows: el selector ya nos dio el id; no hace falta volver a listar (es lo lento y lo intermitente).
       if (pendingScreenId) {
         const id = pendingScreenId
+        const audio = pendingAudio && IS_WIN // audio del sistema: solo Windows, opcional y experimental (puede incluir las voces de la llamada)
         pendingScreenId = null
-        return callback({ video: { id, name: id } }) // sin audio del sistema: capturaría las voces de los demás
+        pendingAudio = false
+        return callback({ video: { id, name: id }, ...(audio ? { audio: 'loopback' } : {}) })
       }
       // Wayland: el portal del sistema pregunta aquí qué compartir.
       const sources = await getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
@@ -354,7 +357,7 @@ function setupIpc() {
     const sources = await getSources({ types: ['screen', 'window'], thumbnailSize: { width: 400, height: 225 }, fetchWindowIcons: false })
     return sources.map((s) => ({ id: s.id, name: s.name, thumb: s.thumbnail.toDataURL(), screen: s.id.startsWith('screen:') }))
   })
-  handle('chooseScreen', (_e, id) => { pendingScreenId = typeof id === 'string' ? id : null })
+  handle('chooseScreen', (_e, id, audio) => { pendingScreenId = typeof id === 'string' ? id : null; pendingAudio = !!audio })
   handle('notify', (_e, { title, body, ch }) => {
     if (!win || win.isFocused() || !Notification.isSupported()) return
     const n = new Notification({ title: String(title).slice(0, 80), body: String(body).slice(0, 200), icon: path.join(__dirname, '..', 'assets', 'icon.png') })

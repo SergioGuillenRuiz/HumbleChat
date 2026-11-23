@@ -468,3 +468,10 @@ test('network.json admite servidores TURN y descarta los inválidos', () => {
   assert.deepEqual(turn, [{ urls: 'turn:203.0.113.7:3478', username: 'u', credential: 'c' }])
   assert.ok(n.iceServers.some((s) => !s.username), 'los STUN por defecto se mantienen')
 })
+
+test('códec de vídeo: H.264 solo si hay codificador por hardware', async () => {
+  const { codecOrder } = await import('../src/renderer/codecs.js')
+  assert.deepEqual(codecOrder(['video/VP9', 'video/VP8'], false), ['video/VP9', 'video/VP8'])
+  assert.deepEqual(codecOrder(['video/VP9', 'video/VP8'], true), ['video/H264', 'video/VP9', 'video/VP8'])
+  assert.deepEqual(codecOrder(['video/VP8'], true), ['video/H264', 'video/VP8'])
+})

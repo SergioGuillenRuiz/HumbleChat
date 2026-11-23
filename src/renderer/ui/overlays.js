@@ -81,11 +81,15 @@ export async function openShareDialog({ needSource }) {
     drawSeg()
 
     const nice = (n) => n.replace(/^Entire screen$/i, 'Pantalla completa').replace(/^Screen (\d+)$/i, 'Pantalla $1')
-    const card = (s) => h('button.src-card', { onclick: () => finish({ id: s.id, preset }) }, h('img', { src: s.thumb, alt: '' }), h('span', nice(s.name)))
+    let audio = false
+    const audioRow = state.platform === 'win32'
+      ? h('label.chk', h('input', { type: 'checkbox', onchange: (e) => { audio = e.target.checked } }), h('span', 'Compartir también el audio del sistema ', h('small', '(experimental: usa auriculares para evitar eco)')))
+      : null
+    const card = (s) => h('button.src-card', { onclick: () => finish({ id: s.id, preset, audio }) }, h('img', { src: s.thumb, alt: '' }), h('span', nice(s.name)))
     el.append(h('div.modal.wide',
       h('div.modal-body',
         h('h2', 'Compartir pantalla'),
-        h('h3', 'Calidad'), seg,
+        h('h3', 'Calidad'), seg, audioRow,
         needSource
           ? [h('h3', 'Pantallas'), h('div.src-grid', ...sources.filter((s) => s.screen).map(card)),
              sources.some((s) => !s.screen) && h('h3', 'Ventanas'),
@@ -93,7 +97,7 @@ export async function openShareDialog({ needSource }) {
           : h('p.muted', 'Después, el sistema te preguntará qué pantalla o ventana quieres compartir.')),
       h('div.modal-foot',
         h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'),
-        !needSource && h('button.btn.brand', { onclick: () => finish({ id: null, preset }) }, 'Continuar'))))
+        !needSource && h('button.btn.brand', { onclick: () => finish({ id: null, preset, audio: false }) }, 'Continuar'))))
   })
 }
 
