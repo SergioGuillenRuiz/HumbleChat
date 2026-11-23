@@ -26,7 +26,13 @@ export const state = {
   voice: null, // { ch, muted, deafened, sharing } mientras estás en una llamada
   watching: null, // id de quien estás viendo compartir pantalla
   streams: new Map(), // id -> MediaStream de pantalla
-  prefs: { input: store('input') || '', output: store('output') || '' }
+  cams: new Map(), // id -> MediaStream de cámara
+  prefs: { input: store('input') || '', output: store('output') || '', camera: store('camera') || '' },
+  firstRun: 0,
+  typing: new Map(), // canal -> Map(id -> caduca)
+  mentions: new Map(), // canal -> nº de menciones sin leer
+  collapsed: store('collapsed') || {}, // categorías plegadas
+  notify: { desktop: store('notifyDesktop') !== false, sounds: store('notifySounds') !== false }
 }
 
 export const channel = (id) => state.channels.find((c) => c.id === id)

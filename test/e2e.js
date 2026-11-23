@@ -13,6 +13,16 @@ fs.mkdirSync(SHOTS, { recursive: true })
 const shot = (p, n) => p.page.screenshot({ path: path.join(SHOTS, n + '.png') })
 const say = async (p, text) => { await p.page.fill('.composer textarea', text); await p.page.keyboard.press('Enter') }
 const count = (p, sel) => p.page.locator(sel).count()
+// Xvfb: la lista de pantallas a veces tarda o llega vacía; en un escritorio real es inmediata. Se reintenta el gesto.
+async function openShare(p) {
+  for (let i = 0; i < 4; i++) {
+    await p.page.locator('.round[aria-label="Compartir pantalla"]').click()
+    if (await p.page.locator('.seg-item').first().waitFor({ timeout: 25000 }).then(() => true, () => false)) return
+    await p.page.keyboard.press('Escape')
+    await sleep(1000)
+  }
+  throw new Error('no se abrió el diálogo de compartir pantalla')
+}
 let passed = 0
 const ok = (msg) => { passed++; console.log('  ✔', msg) }
 
@@ -53,7 +63,7 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     console.log('Borrar mensaje propio')
     const mine = a.page.locator('.msg', { hasText: 'Hola equipo' })
     await mine.hover()
-    await mine.locator('.m-actions button').click()
+    await mine.locator('.m-actions button[aria-label="Eliminar"]').click()
     await a.page.locator('.modal .btn.danger').click()
     for (const p of [a, b, c]) await waitFor(async () => (await count(p, '.msg:has-text("Hola equipo")')) === 0, 8000, p.name + ' ve el borrado')
     ok('el borrado se replica')
@@ -66,6 +76,82 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     await c.page.locator('.ch', { hasText: 'general' }).first().click()
     await waitFor(async () => (await count(c, '.ch.unread')) === 0, 5000, 'se limpia al leer')
     ok('indicador de no leído aparece y se limpia')
+
+    console.log('Chat estilo Discord')
+    // responder
+    const target = b.page.locator('.msg', { hasText: 'Funciona' }).first()
+    await target.hover()
+    await target.locator('button[aria-label="Responder"]').click()
+    if ((await count(b, '.reply-bar:not(.hidden)')) !== 1) throw new Error('no aparece la barra "Respondiendo a"')
+    await b.page.keyboard.type('respuesta con cita')
+    await b.page.keyboard.press('Enter')
+    for (const p of [a, c]) await waitFor(async () => (await count(p, '.msg:has-text("respuesta con cita") .reply-text')) === 1, 8000, p.name + ' ve la cita')
+    ok('responder muestra la cita del mensaje original')
+
+    // reaccionar (y que otro se sume pulsando el chip)
+    const rm = a.page.locator('.msg', { hasText: 'respuesta con cita' })
+    await rm.hover()
+    await rm.locator('.m-actions .quick').first().click()
+    await waitFor(async () => (await count(b, '.msg:has-text("respuesta con cita") .react:not(.add)')) === 1, 8000, 'B ve la reacción')
+    await b.page.locator('.msg:has-text("respuesta con cita") .react:not(.add)').first().click()
+    await waitFor(async () => /2/.test(await a.page.locator('.msg:has-text("respuesta con cita") .react:not(.add) .re-count').first().textContent()), 8000, 'A ve 2 reacciones')
+    ok('reacciones: se replican y otro se suma con un clic')
+
+    // editar con ↑ no hace falta: botón de editar
+    const em = a.page.locator('.msg', { hasText: 'mensaje en general' }).first()
+    await em.hover()
+    await em.locator('button[aria-label="Editar"]').click()
+    await a.page.keyboard.press('End')
+    await a.page.keyboard.type(' EDITADO')
+    await a.page.keyboard.press('Enter')
+    for (const p of [b, c]) await waitFor(async () => (await count(p, '.msg:has-text("mensaje en general EDITADO") .edited')) === 1, 8000, p.name + ' ve (editado)')
+    ok('editar un mensaje propio se replica con la marca (editado)')
+
+    // escribiendo…
+    await c.page.fill('.composer textarea', 'algo que no envío')
+    await waitFor(async () => /Pablo está escribiendo/.test(await a.page.locator('.typing').textContent()), 8000, 'A ve que Pablo escribe')
+    ok('"está escribiendo…" aparece en los demás')
+    await c.page.fill('.composer textarea', '')
+
+    // selector de emojis con búsqueda en español
+    await b.page.locator('button.attach.emoji').click()
+    await b.page.fill('.ep-search', 'fuego')
+    await b.page.locator('.ep-emoji', { hasText: '🔥' }).first().click()
+    if (!(await b.page.inputValue('.composer textarea')).includes('🔥')) throw new Error('el emoji no se insertó')
+    await b.page.fill('.composer textarea', '')
+    ok('selector de emojis: busca "fuego" e inserta 🔥')
+
+    // menciones: insignia roja + divisor NUEVO al volver al canal
+    await a.page.locator('.ch', { hasText: 'fotos' }).click()
+    await b.page.fill('.composer textarea', '@Serg')
+    await b.page.waitForSelector('.mention-box:not(.hidden)')
+    await b.page.keyboard.press('Enter')
+    await b.page.keyboard.type('mira esto')
+    await b.page.keyboard.press('Enter')
+    await waitFor(async () => (await a.page.locator('.ch .badge').textContent().catch(() => '')) === '1', 8000, 'A ve la insignia de mención')
+    await shot(a, '10-mencion')
+    await a.page.locator('.ch', { hasText: 'general' }).first().click()
+    await waitFor(async () => (await count(a, '.newline')) === 1 && (await count(a, '.msg.mentioned')) >= 1 && (await count(a, '.ch .badge')) === 0, 8000, 'divisor NUEVO y mención resaltada')
+    ok('menciones: autocompletado, insignia roja, mensaje resaltado y divisor NUEVO')
+
+    // perfil, menú del servidor y categorías plegables
+    await a.page.locator('.member', { hasText: 'Marta' }).click()
+    await a.page.waitForSelector('.profile-card')
+    if (!/Marta/.test(await a.page.locator('.pc-name').textContent())) throw new Error('perfil incorrecto')
+    await a.page.keyboard.press('Escape')
+    await a.page.locator('.sb-header').click()
+    await a.page.locator('.ctx-item', { hasText: 'Invitar a amigos' }).click()
+    await a.page.waitForSelector('.modal h2:has-text("Invitar a un amigo")')
+    await a.page.keyboard.press('Escape')
+    await a.page.locator('.modal-foot .btn').click({ timeout: 1500 }).catch(() => {})
+    const before = await count(a, '.ch:has(.icon) >> nth=0') >= 0 ? await a.page.locator('.sb-scroll .ch').count() : 0
+    await a.page.locator('.cat', { hasText: 'Canales de texto' }).click()
+    const folded = await a.page.locator('.sb-scroll .ch').count()
+    await a.page.locator('.cat', { hasText: 'Canales de texto' }).click()
+    if (!(folded < before)) throw new Error(`la categoría no se pliega (${before} → ${folded})`)
+    ok('tarjeta de perfil, menú del servidor (invitar) y categorías plegables')
+    await shot(a, '11-chat-final')
+    await b.page.locator('.ch', { hasText: 'general' }).first().click()
 
     console.log('Voz (WebRTC, micro falso)')
     await a.page.locator('.vch .ch', { hasText: 'General' }).click()
@@ -99,8 +185,18 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     await shot(a, '09-diagnostico')
     await a.page.keyboard.press('Escape')
 
+    console.log('Cámara')
+    await a.page.locator('.round[aria-label="Encender cámara"]').click()
+    await waitFor(async () => (await count(b, '.tile.has-cam')) >= 1, 15000, 'B ve la cámara de A')
+    await waitFor(() => b.page.evaluate(() => [...document.querySelectorAll('.tile.has-cam video.cam')].some((v) => v.videoWidth > 0)), 15000, 'vídeo de cámara con fotogramas')
+    ok('la cámara de A se ve en el recuadro de B (vídeo real)')
+    await shot(b, '12-camara')
+    await a.page.locator('.round[aria-label="Apagar cámara"]').click()
+    await waitFor(async () => (await count(b, '.tile.has-cam')) === 0, 10000, 'cámara apagada')
+    ok('al apagar la cámara vuelve el avatar')
+
     console.log('Pantalla compartida')
-    await a.page.locator('.round[title="Compartir pantalla"]').click()
+    await openShare(a)
     await a.page.locator('.seg-item', { hasText: 'Nitidez' }).click() // elegir calidad en el diálogo
     await a.page.locator('.src-card').first().click()
     await waitFor(async () => (await count(a, '.tile-live')) > 0, 15000, 'A en directo')
@@ -115,7 +211,7 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     ok('al dejar de compartir se limpia la vista')
 
     // Volver a compartir en la misma llamada (antes degradaba a ~1 fps por reutilizar el transceptor).
-    await a.page.locator('.round[title="Compartir pantalla"]').click()
+    await openShare(a)
     if ((await a.page.locator('.seg-item.active').textContent()).indexOf('Nitidez') < 0) throw new Error('la calidad elegida no se recuerda')
     await a.page.locator('.src-card').first().click()
     await waitFor(async () => (await count(b, '.tile-watch')) > 0, 20000, 'B ve de nuevo el botón')
@@ -130,10 +226,21 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     await a.page.locator('.round.on').click()
     await waitFor(async () => (await count(b, '.theater')) === 0, 10000, 'B deja de ver')
 
+    console.log('Sin micrófono (dispositivo ausente)')
+    const d = await spawn('Diego', { fakeMedia: false })
+    await waitFor(async () => (await count(d, '.member:not(.offline)')) >= 3, 25000, 'Diego se une')
+    await d.page.locator('.vch .ch', { hasText: 'Juegos' }).click()
+    await waitFor(async () => /No se encuentra el micrófono/.test((await d.page.locator('.toast').allTextContents()).join(' ')), 10000, 'mensaje claro sin micrófono')
+    ok('sin micrófono: entra solo a escuchar y la app explica qué hacer')
+    await d.page.locator('.callpanel .icon-btn').click() // desconectar
+    await waitFor(async () => (await count(d, '.callpanel')) === 0, 5000, 'Diego sale')
+    await d.app.close()
+    await sleep(500)
+
     console.log('Si el primero se va, la sesión sigue')
     const profileA = a.profile
     await a.app.close()
-    await waitFor(async () => (await count(b, '.member.offline')) === 1, 25000, 'B ve a A fuera')
+    await waitFor(async () => (await count(b, '.member.offline')) >= 1, 25000, 'B ve a A fuera')
     ok('B y C notan que A se fue')
     await b.page.locator('.ch', { hasText: 'general' }).first().click() // B estaba en la vista de voz
     await say(b, 'sigo aquí sin el primero')

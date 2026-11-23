@@ -38,6 +38,12 @@ module.exports = {
         ]
       },
       {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
         "target": "zip",
         "arch": [
           "x64"
@@ -47,6 +53,9 @@ module.exports = {
     "icon": "build/icon.png",
     signAndEditExecutable: process.platform === 'win32',
     "artifactName": "HumbleChat-${version}-win.${ext}"
+  },
+  "portable": {
+    "artifactName": "HumbleChat-${version}-portable.${ext}"
   },
   "nsis": {
     "oneClick": true,

@@ -28,7 +28,7 @@ const VOICE_IDS = new Set(CHANNELS.filter((c) => c.type === 'voice').map((c) => 
 
 function cleanVoice(v) {
   if (!v || typeof v !== 'object' || !VOICE_IDS.has(v.ch)) return null
-  return { ch: v.ch, mute: !!v.mute, deaf: !!v.deaf, share: !!v.share }
+  return { ch: v.ch, mute: !!v.mute, deaf: !!v.deaf, share: !!v.share, cam: !!v.cam }
 }
 
 function cleanVector(v) {
@@ -272,8 +272,26 @@ class ChatNode extends EventEmitter {
     return clean
   }
 
-  send(ch, text, att) {
-    return this._author({ t: 'msg', ch, text: String(text ?? ''), ...(att && att.length ? { att } : {}) })
+  send(ch, text, att, re) {
+    return this._author({ t: 'msg', ch, text: String(text ?? ''), ...(att && att.length ? { att } : {}), ...(re ? { re } : {}) })
+  }
+
+  /** Editar un mensaje propio. */
+  edit(id, text) {
+    const target = this.store.events.get(id)
+    if (!target || target.t !== 'msg' || target.a !== this.id || this.store.deleted.has(id)) return null
+    return this._author({ t: 'edit', x: id, text: String(text ?? '') })
+  }
+
+  /** Poner o quitar una reacción en cualquier mensaje. */
+  react(id, emoji, on) {
+    if (!this.store.message(id)) return null
+    return this._author({ t: 'react', x: id, e: String(emoji), on: !!on })
+  }
+
+  /** "Está escribiendo…": efímero, solo a los conectados directamente. */
+  typing(ch) {
+    if (CHANNELS.some((c) => c.id === ch && c.type === 'text')) this._broadcast({ t: 'typ', ch })
   }
 
   remove(id) {
@@ -381,6 +399,9 @@ class ChatNode extends EventEmitter {
         return this._emitMembers()
       case 'sig':
         if (JSON.stringify(m.data ?? null).length < 64 * 1024) this.emit('signal', peer.id, m.data)
+        return
+      case 'typ':
+        if (CHANNELS.some((c) => c.id === m.ch && c.type === 'text')) this.emit('typing', peer.id, m.ch)
         return
       case 'bw': return this._onBlobWant(peer, m.h)
       case 'bmiss':

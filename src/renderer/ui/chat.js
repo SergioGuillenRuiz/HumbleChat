@@ -1,42 +1,58 @@
 // Panel de chat de un canal de texto: cabecera, mensajes, redactor.
+// Mensajes con respuestas, edición, reacciones, menciones, "escribiendo…" y divisor de nuevos.
 import { h, $, fill, avatar, fmtStamp, fmtClock, fmtDay, fmtFull, dayKey, fmtBytes } from '../util.js'
 import { icon } from '../icons.js'
 import { state, bus, channel, member, markRead } from '../state.js'
 import { renderMarkdown } from '../markdown.js'
-import { openLightbox, confirmModal, toast } from './overlays.js'
+import { openLightbox, confirmModal, toast, openContextMenu } from './overlays.js'
+import { openEmojiPicker, quickEmoji } from '../emoji.js'
+import { openProfile } from './popout.js'
 
 export const evId = (ev) => `${ev.a}:${ev.n}`
+const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-let root, scroller, list, composer, input, pendingBox, fileInput
-let cur = { ch: null, msgs: [], full: false, loading: false }
+let root, scroller, list, input, pendingBox, fileInput, replyBar, typingEl, jumpBtn, mentionBox
+let cur = { ch: null, msgs: [], full: false, loading: false, divider: null }
 const drafts = new Map()
 let pending = [] // adjuntos preparados, aún sin enviar
+let replyTo = null // { id, a, text }
+let editing = null // id del mensaje que se está editando
+let lastTyping = 0
+const mentionMap = new Map() // "@Nombre" -> id, para el borrador actual
+let mention = null // { items, index } mientras el autocompletado está abierto
 
+// ───────────────────────── montaje ─────────────────────────
 export function mountChat(el) {
   root = el
-  const header = h('div.header', { id: 'chat-header' })
   list = h('div.messages')
   scroller = h('div.scroller', list)
+  jumpBtn = h('button.jump', { onclick: () => { scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }) } }, 'Saltar al presente', icon('arrowDown', 16))
   input = h('textarea', { rows: 1, placeholder: '', spellcheck: true, maxLength: state.limits.text, 'aria-label': 'Mensaje' })
   pendingBox = h('div.pending')
+  replyBar = h('div.reply-bar.hidden')
+  typingEl = h('div.typing')
+  mentionBox = h('div.mention-box.hidden')
   fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true })
-  composer = h('div.composer-wrap',
-    pendingBox,
-    h('div.composer',
-      h('button.attach', { title: 'Adjuntar imagen', onclick: () => fileInput.click() }, icon('plus', 24)),
-      input, fileInput))
-  root.append(header, h('div.chat-body', scroller), composer)
+  const emojiBtn = h('button.attach.emoji', { tip: 'Emojis', onclick: () => openEmojiPicker(emojiBtn, insertAtCaret) }, icon('smile', 24))
+  const composer = h('div.composer-wrap',
+    mentionBox, replyBar, pendingBox,
+    h('div.composer', h('button.attach', { tip: 'Adjuntar imagen', onclick: () => fileInput.click() }, icon('plus', 24)), input, emojiBtn, fileInput),
+    typingEl)
+  root.append(h('div.header', { id: 'chat-header' }), h('div.chat-body', scroller, jumpBtn), composer)
 
-  input.addEventListener('input', autosize)
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit() }
-  })
+  input.addEventListener('input', onInput)
+  input.addEventListener('keydown', onKeydown)
+  input.addEventListener('click', checkMention)
   input.addEventListener('paste', (e) => {
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'))
     if (files.length) { e.preventDefault(); addFiles(files) }
   })
   fileInput.addEventListener('change', () => { addFiles([...fileInput.files]); fileInput.value = '' })
-  scroller.addEventListener('scroll', () => { if (scroller.scrollTop < 120) loadOlder() })
+  scroller.addEventListener('scroll', () => {
+    if (scroller.scrollTop < 120) loadOlder()
+    updateJump()
+  })
   root.addEventListener('dragover', (e) => { e.preventDefault(); root.classList.add('dropping') })
   root.addEventListener('dragleave', (e) => { if (e.target === root || !root.contains(e.relatedTarget)) root.classList.remove('dropping') })
   root.addEventListener('drop', (e) => {
@@ -45,6 +61,8 @@ export function mountChat(el) {
   })
   bus.on('members', () => { if (cur.ch) renderHeader() })
   bus.on('toggleMembers', renderHeader)
+  bus.on('typing', renderTyping)
+  setInterval(renderTyping, 1500)
 }
 
 function renderHeader() {
@@ -56,27 +74,33 @@ function renderHeader() {
     c?.topic && h('span.h-topic', c.topic),
     h('div.h-tools',
       h('button.icon-btn' + (state.showMembers ? '.active' : ''), {
-        title: state.showMembers ? 'Ocultar lista de miembros' : 'Mostrar lista de miembros',
+        tip: state.showMembers ? 'Ocultar lista de miembros' : 'Mostrar lista de miembros', tipPos: 'bottom',
         onclick: () => bus.emit('toggleMembersClick')
       }, icon('people', 24))))
 }
 
+// ───────────────────────── canal ─────────────────────────
 export async function showChannel(ch, reload = false) {
   if (cur.ch && !reload) drafts.set(cur.ch, input.value)
-  cur = { ch, msgs: [], full: false, loading: false }
+  const lastRead = state.lastRead[ch] || state.firstRun
+  const hadUnread = state.unread.has(ch)
+  cur = { ch, msgs: [], full: false, loading: false, divider: null }
+  if (!reload) { editing = null; replyTo = null; mentionMap.clear(); renderReplyBar(); closeMention() }
   const c = channel(ch)
   input.placeholder = `Enviar mensaje a #${c.name}`
   if (!reload) { input.value = drafts.get(ch) || ''; autosize() }
   renderHeader()
+  renderTyping()
   list.replaceChildren()
   const msgs = await window.humble.history(ch, { limit: 60 })
   if (cur.ch !== ch) return // cambió de canal mientras cargaba
   const seen = new Set(msgs.map(evId))
   cur.msgs = [...msgs, ...cur.msgs.filter((m) => !seen.has(evId(m)))]
   cur.full = msgs.length < 60
+  if (hadUnread && !reload) { const f = cur.msgs.find((m) => m.ts > lastRead && m.a !== state.me.id); cur.divider = f ? evId(f) : null }
   renderAll(true)
   touchRead()
-  if (!('ontouchstart' in window)) input.focus()
+  input.focus()
 }
 
 async function loadOlder() {
@@ -99,22 +123,30 @@ export function touchRead() {
   const last = cur.msgs[cur.msgs.length - 1]
   if (last && document.hasFocus() && state.view.ch === cur.ch) {
     markRead(cur.ch, last.ts)
-    if (state.unread.delete(cur.ch)) bus.emit('unread')
+    const a = state.unread.delete(cur.ch)
+    const b = state.mentions.delete(cur.ch)
+    if (a || b) bus.emit('unread')
   }
 }
 
+// ───────────────────────── eventos en vivo ─────────────────────────
 /** Lote de eventos nuevos. Si es enorme (sincronización inicial) se recarga el canal en vez de insertar uno a uno. */
-export function onEvents(evs) {
+export function onEvents(evs, updates = []) {
   if (!cur.ch) return
   const mine = evs.filter((e) => e.t === 'del' || e.ch === cur.ch)
   if (mine.length > 100) return showChannel(cur.ch, true)
   for (const ev of mine) onEvent(ev)
+  for (const u of updates) updateMessage(u)
 }
 
 function onEvent(ev) {
   if (ev.t === 'del') {
     const i = cur.msgs.findIndex((m) => evId(m) === ev.x)
-    if (i >= 0) { cur.msgs.splice(i, 1); renderAll(false, true) }
+    if (i >= 0) cur.msgs.splice(i, 1)
+    for (const m of cur.msgs) if (m.reply?.id === ev.x) m.reply = { id: ev.x, missing: true }
+    if (editing === ev.x) editing = null
+    if (replyTo?.id === ev.x) { replyTo = null; renderReplyBar() }
+    renderAll(false, true)
     return
   }
   if (ev.t !== 'msg' || ev.ch !== cur.ch) return
@@ -125,11 +157,34 @@ function onEvent(ev) {
   if (!inOrder) { cur.msgs.sort((a, b) => a.ts - b.ts || (evId(a) < evId(b) ? -1 : 1)); return renderAll(false, true) }
   const stick = nearBottom() || ev.a === state.me.id
   list.append(...buildOne(ev, last))
-  if (stick) scroller.scrollTop = scroller.scrollHeight
+  if (stick) { scroller.scrollTop = scroller.scrollHeight; updateJump() }
+  else updateJump(true)
   touchRead()
+  // un mensaje propio deja de mostrar "escribiendo…" de ese usuario
+  state.typing.get(cur.ch)?.delete(ev.a)
+  renderTyping()
+}
+
+/** Edición o reacciones nuevas: se sustituye solo ese mensaje. */
+function updateMessage(msg) {
+  const i = cur.msgs.findIndex((m) => evId(m) === evId(msg))
+  if (i < 0) return
+  cur.msgs[i] = msg
+  for (const m of cur.msgs) if (m.reply?.id === evId(msg)) m.reply = { ...m.reply, text: msg.text.slice(0, 140) }
+  const el = list.querySelector(`[data-id="${evId(msg)}"]`)
+  if (!el) return
+  const stick = nearBottom()
+  el.replaceWith(message(msg, el.classList.contains('grouped')))
+  if (stick) scroller.scrollTop = scroller.scrollHeight
+  updateJump()
 }
 
 const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160
+
+function updateJump(newOne) {
+  const far = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 500
+  jumpBtn.classList.toggle('show', !!(far || (newOne && !nearBottom())))
+}
 
 function renderAll(toBottom, keep) {
   const stick = toBottom || (keep && nearBottom())
@@ -140,6 +195,7 @@ function renderAll(toBottom, keep) {
   list.replaceChildren(frag)
   if (stick) scroller.scrollTop = scroller.scrollHeight
   else if (keep) scroller.scrollTop = prevTop
+  updateJump()
 }
 
 function welcome() {
@@ -150,27 +206,93 @@ function welcome() {
     h('p', `Este es el principio del canal #${c.name}.`))
 }
 
-/** Devuelve [divisor de día?, mensaje]. `prev` decide si va agrupado con el anterior. */
+/** Devuelve [divisores?, mensaje]. `prev` decide si va agrupado con el anterior. */
 function buildOne(ev, prev) {
   const out = []
   const newDay = !prev || dayKey(prev.ts) !== dayKey(ev.ts)
   if (newDay) out.push(h('div.day', h('span', fmtDay(ev.ts))))
-  const grouped = !newDay && prev.a === ev.a && ev.ts - prev.ts < 7 * 60 * 1000
+  if (cur.divider && cur.divider === evId(ev)) out.push(h('div.newline', h('span', 'NUEVO')))
+  const grouped = !newDay && prev.a === ev.a && ev.ts - prev.ts < 7 * 60 * 1000 && !ev.reply && !(cur.divider && cur.divider === evId(ev))
   out.push(message(ev, grouped))
   return out
 }
 
+// ───────────────────────── un mensaje ─────────────────────────
+const nameOf = (id) => member(id).name
+
 function message(ev, grouped) {
+  const id = evId(ev)
   const m = member(ev.a)
   const mine = ev.a === state.me.id
-  const body = h('div.m-body',
-    !grouped && h('div.m-head', h('span.m-author', m.name), h('time', { title: fmtFull(ev.ts) }, fmtStamp(ev.ts))),
-    ev.text && renderMarkdown(ev.text),
-    ev.att?.length > 0 && h('div.atts', ev.att.map(attachment)))
-  return h('div.msg' + (grouped ? '.grouped' : ''), { dataset: { id: evId(ev), uid: ev.a } },
-    h('div.m-gutter', grouped ? h('time', { title: fmtFull(ev.ts) }, fmtClock(ev.ts)) : avatar(m, 40)),
+  const mentioned = !mine && ev.text.includes(`<@${state.me.id}>`)
+  const profile = (e) => openProfile(e.currentTarget, ev.a)
+
+  let body
+  if (editing === id) body = editor(ev)
+  else {
+    body = h('div.m-body',
+      !grouped && h('div.m-head', h('span.m-author', { onclick: profile }, m.name), h('time', { tip: fmtFull(ev.ts) }, fmtStamp(ev.ts))),
+      ev.text && h('div.m-text', renderMarkdown(ev.text), ev.edited && h('span.edited', { tip: 'Mensaje editado' }, '(editado)')),
+      ev.att?.length > 0 && h('div.atts', ev.att.map(attachment)),
+      ev.reactions?.length > 0 && reactionsBar(ev))
+  }
+  return h('div.msg' + (grouped ? '.grouped' : '') + (mentioned ? '.mentioned' : '') + (ev.reply ? '.has-reply' : '') + (editing === id ? '.editing' : ''), {
+    dataset: { id, uid: ev.a },
+    oncontextmenu: (e) => { if (e.target.closest('textarea,a')) return; e.preventDefault(); messageMenu(e, ev) }
+  },
+    ev.reply && replyPreview(ev.reply),
+    h('div.m-gutter', grouped ? h('time', { tip: fmtFull(ev.ts) }, fmtClock(ev.ts)) : h('div.m-avatar', { onclick: profile }, avatar(m, 40))),
     body,
-    mine && h('div.m-actions', h('button.icon-btn', { title: 'Eliminar', onclick: () => askDelete(ev) }, icon('trash', 18))))
+    editing !== id && toolbar(ev, mine))
+}
+
+function replyPreview(r) {
+  if (r.missing) return h('div.reply', h('span.spine'), h('span.reply-missing', icon('reply', 14), 'No se puede cargar el mensaje original (puede haberse eliminado).'))
+  const m = member(r.a)
+  const text = r.text ? r.text.replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + nameOf(id)).replace(/\s+/g, ' ') : ''
+  return h('div.reply', { onclick: () => jumpTo(r.id) },
+    h('span.spine'), avatar(m, 16),
+    h('span.reply-name', '@' + m.name),
+    h('span.reply-text', text || (r.att ? 'Haz clic para ver el adjunto' : '')))
+}
+
+function toolbar(ev, mine) {
+  const id = evId(ev)
+  const react = h('button.icon-btn', { tip: 'Añadir reacción', onclick: () => openEmojiPicker(react, (e) => window.humble.react(id, e, true), { above: false }) }, icon('addReaction', 20))
+  return h('div.m-actions',
+    ...quickEmoji().slice(0, 2).map((e) => h('button.icon-btn.quick', { tip: e + ' reaccionar', onclick: () => window.humble.react(id, e, true) }, e)),
+    react,
+    h('button.icon-btn', { tip: 'Responder', onclick: () => startReply(ev) }, icon('reply', 20)),
+    mine && h('button.icon-btn', { tip: 'Editar', onclick: () => startEdit(ev) }, icon('pencil', 20)),
+    mine && h('button.icon-btn.danger', { tip: 'Eliminar', onclick: () => askDelete(ev) }, icon('trash', 20)))
+}
+
+function messageMenu(e, ev) {
+  const mine = ev.a === state.me.id
+  const id = evId(ev)
+  openContextMenu(e.clientX, e.clientY, [
+    { label: 'Añadir reacción', icon: 'addReaction', onclick: () => openEmojiPicker(list.querySelector(`[data-id="${id}"]`) || input, (em) => window.humble.react(id, em, true), { above: false }) },
+    { label: 'Responder', icon: 'reply', onclick: () => startReply(ev) },
+    mine && { label: 'Editar mensaje', icon: 'pencil', onclick: () => startEdit(ev) },
+    ev.text && { label: 'Copiar texto', icon: 'plus', onclick: () => navigator.clipboard.writeText(plainText(ev.text)).then(() => toast('Texto copiado', 'ok')) },
+    mine && 'sep',
+    mine && { label: 'Eliminar mensaje', icon: 'trash', danger: true, onclick: () => askDelete(ev) }
+  ])
+}
+
+const plainText = (t) => t.replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + nameOf(id))
+
+function reactionsBar(ev) {
+  const id = evId(ev)
+  return h('div.reactions',
+    ev.reactions.map((r) => {
+      const mineR = r.users.includes(state.me.id)
+      const names = r.users.map(nameOf)
+      const who = names.length <= 3 ? names.join(', ').replace(/, ([^,]*)$/, ' y $1') : `${names.slice(0, 3).join(', ')} y ${names.length - 3} más`
+      return h('button.react' + (mineR ? '.mine' : ''), { tip: `${who} reaccionó con ${r.e}`, onclick: () => window.humble.react(id, r.e, !mineR) },
+        h('span.re-emoji', r.e), h('span.re-count', String(r.users.length)))
+    }),
+    h('button.react.add', { tip: 'Añadir reacción', onclick: (e) => openEmojiPicker(e.currentTarget, (em) => window.humble.react(id, em, true), { above: false }) }, icon('addReaction', 16)))
 }
 
 function attachment(a) {
@@ -200,26 +322,197 @@ async function askDelete(ev) {
   if (ok) window.humble.remove(evId(ev)).catch(() => toast('No se pudo eliminar el mensaje.', 'warn'))
 }
 
-// ───────────── Redactor ─────────────
+function jumpTo(id) {
+  const el = list.querySelector(`[data-id="${id}"]`)
+  if (!el) return toast('Ese mensaje está más arriba en el historial.')
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  el.classList.add('flash')
+  setTimeout(() => el.classList.remove('flash'), 1800)
+}
+
+// ───────────────────────── responder y editar ─────────────────────────
+export function startReply(ev) {
+  replyTo = { id: evId(ev), a: ev.a, text: ev.text }
+  renderReplyBar()
+  input.focus()
+}
+
+function renderReplyBar() {
+  replyBar.classList.toggle('hidden', !replyTo)
+  if (!replyTo) return replyBar.replaceChildren()
+  fill(replyBar,
+    h('span', 'Respondiendo a ', h('b', nameOf(replyTo.a))),
+    h('button.icon-btn', { tip: 'Cancelar respuesta', onclick: () => { replyTo = null; renderReplyBar(); input.focus() } }, icon('close', 16)))
+}
+
+/** `<@id>` -> "@Nombre" (para editar) y el mapa inverso para volver a convertir al guardar. */
+function toDisplay(text) {
+  const map = new Map()
+  return { text: text.replace(/<@([0-9a-f]{64})>/g, (_s, id) => { const t = '@' + nameOf(id); map.set(t, id); return t }), map }
+}
+
+function fromDisplay(text, map) {
+  for (const [token, id] of [...map].sort((a, b) => b[0].length - a[0].length)) {
+    text = text.replace(new RegExp(escapeRe(token) + '(?![\\p{L}\\p{N}_])', 'gu'), `<@${id}>`)
+  }
+  return text
+}
+
+function startEdit(ev) {
+  const prev = editing
+  editing = evId(ev)
+  for (const id of [prev, editing]) {
+    const old = list.querySelector(`[data-id="${id}"]`)
+    const msg = cur.msgs.find((m) => evId(m) === id)
+    if (old && msg) old.replaceWith(message(msg, old.classList.contains('grouped')))
+  }
+  list.querySelector(`[data-id="${editing}"] textarea`)?.focus()
+}
+
+function stopEdit() {
+  const id = editing
+  editing = null
+  const old = list.querySelector(`[data-id="${id}"]`)
+  const msg = cur.msgs.find((m) => evId(m) === id)
+  if (old && msg) old.replaceWith(message(msg, old.classList.contains('grouped')))
+  input.focus()
+}
+
+function editor(ev) {
+  const { text, map } = toDisplay(ev.text)
+  const ta = h('textarea.edit-input', { rows: 1, maxLength: state.limits.text, spellcheck: true })
+  ta.value = text
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px' }
+  const save = async () => {
+    const t = fromDisplay(ta.value, map).trim()
+    if (!t) return askDelete(ev)
+    if (t === ev.text) return stopEdit()
+    editing = null
+    try { await window.humble.edit(evId(ev), t) } catch { toast('No se pudo editar el mensaje.', 'warn') }
+    const old = list.querySelector(`[data-id="${evId(ev)}"]`)
+    const msg = cur.msgs.find((m) => evId(m) === evId(ev))
+    if (old && msg) old.replaceWith(message(msg, old.classList.contains('grouped')))
+    input.focus()
+  }
+  ta.addEventListener('input', fit)
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save() }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stopEdit() }
+  })
+  setTimeout(() => { fit(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length) })
+  return h('div.m-body',
+    h('div.m-head', h('span.m-author', member(ev.a).name)),
+    h('div.editor', ta),
+    h('div.editor-hint', 'escape para ', h('a', { onclick: stopEdit }, 'cancelar'), ' • intro para ', h('a', { onclick: save }, 'guardar')))
+}
+
+// ───────────────────────── "escribiendo…" ─────────────────────────
+function renderTyping() {
+  if (!typingEl) return
+  const now = Date.now()
+  const map = state.typing.get(cur.ch)
+  const names = []
+  if (map) for (const [id, until] of map) { if (until < now) map.delete(id); else if (id !== state.me.id) names.push(nameOf(id)) }
+  if (!names.length) return typingEl.replaceChildren()
+  const text = names.length === 1 ? `${names[0]} está escribiendo…` : names.length === 2 ? `${names[0]} y ${names[1]} están escribiendo…` : 'Varias personas están escribiendo…'
+  fill(typingEl, h('span.dots', h('i'), h('i'), h('i')), h('span', h('b', text)))
+}
+
+// ───────────────────────── redactor ─────────────────────────
 function autosize() {
   input.style.height = 'auto'
   input.style.height = Math.min(input.scrollHeight, 300) + 'px'
 }
 
+function insertAtCaret(text) {
+  const a = input.selectionStart
+  const b = input.selectionEnd
+  input.setRangeText(text, a, b, 'end')
+  input.focus()
+  onInput()
+}
+
+function onInput() {
+  autosize()
+  checkMention()
+  if (input.value.trim() && Date.now() - lastTyping > 3000 && cur.ch) {
+    lastTyping = Date.now()
+    window.humble.typing(cur.ch).catch(() => {})
+  }
+}
+
+function onKeydown(e) {
+  if (mention && !mentionBox.classList.contains('hidden')) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      mention.index = (mention.index + (e.key === 'ArrowDown' ? 1 : mention.items.length - 1)) % mention.items.length
+      return drawMention()
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mention.items[mention.index]) }
+    if (e.key === 'Escape') { e.preventDefault(); return closeMention() }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); return }
+  if (e.key === 'Escape' && replyTo) { replyTo = null; renderReplyBar(); return }
+  if (e.key === 'ArrowUp' && !input.value) { // como en Discord: ↑ edita tu último mensaje
+    const mine = [...cur.msgs].reverse().find((m) => m.a === state.me.id && m.text)
+    if (mine) { e.preventDefault(); startEdit(mine) }
+  }
+}
+
+// autocompletado de @menciones
+function checkMention() {
+  const before = input.value.slice(0, input.selectionStart)
+  const m = /(^|\s)@([^\s@]{0,24})$/.exec(before)
+  if (!m) return closeMention()
+  const q = norm(m[2])
+  const items = state.members
+    .filter((x) => norm(x.name).includes(q))
+    .sort((a, b) => (norm(b.name).startsWith(q) - norm(a.name).startsWith(q)) || (b.online - a.online) || a.name.localeCompare(b.name))
+    .slice(0, 8)
+  if (!items.length) return closeMention()
+  mention = { items, index: 0, start: input.selectionStart - m[2].length - 1 }
+  drawMention()
+}
+
+function drawMention() {
+  mentionBox.classList.remove('hidden')
+  fill(mentionBox, h('div.mb-title', 'Miembros'), ...mention.items.map((m, i) =>
+    h('button.mb-item' + (i === mention.index ? '.active' : ''), { onmousedown: (e) => { e.preventDefault(); pickMention(m) } },
+      avatar(m, 24), h('span.mb-name', m.name), !m.online && h('span.mb-off', 'sin conexión'))))
+}
+
+function closeMention() { mention = null; mentionBox?.classList.add('hidden') }
+
+function pickMention(m) {
+  const token = '@' + m.name
+  mentionMap.set(token, m.id)
+  input.setRangeText(token + ' ', mention.start, input.selectionStart, 'end')
+  closeMention()
+  input.focus()
+  autosize()
+}
+
 async function submit() {
-  const text = input.value.trim()
+  let text = input.value.trim()
   if (!text && !pending.length) return
+  text = fromDisplay(text, mentionMap)
   const ch = cur.ch
   const files = pending
+  const re = replyTo?.id
   pending = []
+  replyTo = null
+  renderReplyBar()
   renderPending()
   input.value = ''
+  mentionMap.clear()
   drafts.delete(ch)
   autosize()
+  closeMention()
   try {
     const att = []
     for (const p of files) att.push(await window.humble.addBlob({ data: p.bytes, name: p.name, mime: p.mime, w: p.w, ht: p.ht }))
-    await window.humble.send({ ch, text, att })
+    await window.humble.send({ ch, text, att, re })
+    scroller.scrollTop = scroller.scrollHeight
   } catch (e) {
     toast('No se pudo enviar: ' + String(e.message || e).replace(/^Error invoking remote method '\w+': (Error: )?/, ''), 'warn')
     input.value = text
@@ -240,7 +533,7 @@ function renderPending() {
   pendingBox.replaceChildren(...pending.map((p, i) => h('div.pend',
     h('img', { src: p.url, alt: '' }),
     h('div.pend-name', p.name, h('small', fmtBytes(p.bytes.byteLength))),
-    h('button.pend-x', { title: 'Quitar', onclick: () => { URL.revokeObjectURL(p.url); pending.splice(i, 1); renderPending() } }, icon('close', 14)))))
+    h('button.pend-x', { tip: 'Quitar', onclick: () => { URL.revokeObjectURL(p.url); pending.splice(i, 1); renderPending() } }, icon('close', 14)))))
   pendingBox.classList.toggle('has', pending.length > 0)
 }
 

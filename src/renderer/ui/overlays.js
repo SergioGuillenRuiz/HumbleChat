@@ -5,12 +5,12 @@ import { icon } from '../icons.js'
 import { state, bus } from '../state.js'
 
 // ───────────── Avisos ─────────────
-export function toast(text, kind = 'info') {
+export function toast(text, kind = 'info', ms = 5000) {
   let box = $('#toasts')
   if (!box) { box = h('div#toasts'); document.body.append(box) }
   const el = h('div.toast.' + kind, text)
   box.append(el)
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 250) }, 5000)
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 250) }, ms)
 }
 
 function layer(cls) {
@@ -80,7 +80,8 @@ export async function openShareDialog({ needSource }) {
         h('b', label), h('small', detail))))
     drawSeg()
 
-    const card = (s) => h('button.src-card', { onclick: () => finish({ id: s.id, preset }) }, h('img', { src: s.thumb, alt: '' }), h('span', s.name))
+    const nice = (n) => n.replace(/^Entire screen$/i, 'Pantalla completa').replace(/^Screen (\d+)$/i, 'Pantalla $1')
+    const card = (s) => h('button.src-card', { onclick: () => finish({ id: s.id, preset }) }, h('img', { src: s.thumb, alt: '' }), h('span', nice(s.name)))
     el.append(h('div.modal.wide',
       h('div.modal-body',
         h('h2', 'Compartir pantalla'),
@@ -94,6 +95,25 @@ export async function openShareDialog({ needSource }) {
         h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'),
         !needSource && h('button.btn.brand', { onclick: () => finish({ id: null, preset }) }, 'Continuar'))))
   })
+}
+
+// ───────────── Menú contextual (clic derecho) ─────────────
+/** items: [{ label, icon?, danger?, onclick }] o 'sep' */
+export function openContextMenu(x, y, items) {
+  document.querySelector('.ctxmenu')?.remove()
+  const menu = h('div.ctxmenu')
+  for (const it of items.filter(Boolean)) {
+    if (it === 'sep') { menu.append(h('div.ctx-sep')); continue }
+    menu.append(h('button.ctx-item' + (it.danger ? '.danger' : ''), { onclick: () => { close(); it.onclick() } }, h('span', it.label), it.icon && icon(it.icon, 18)))
+  }
+  document.body.append(menu)
+  menu.style.left = Math.max(6, Math.min(x, innerWidth - menu.offsetWidth - 6)) + 'px'
+  menu.style.top = Math.max(6, Math.min(y, innerHeight - menu.offsetHeight - 6)) + 'px'
+  const close = () => { menu.remove(); removeEventListener('mousedown', off, true); removeEventListener('keydown', onKey, true); removeEventListener('blur', close) }
+  const off = (e) => { if (!menu.contains(e.target)) close() }
+  const onKey = (e) => { if (e.key === 'Escape') close() }
+  setTimeout(() => { addEventListener('mousedown', off, true); addEventListener('keydown', onKey, true); addEventListener('blur', close) })
+  return close
 }
 
 // ───────────── Menú de volumen de un usuario ─────────────
@@ -113,6 +133,21 @@ export function openVolumeMenu(x, y, id, voice) {
   document.body.append(menu)
   const off = (e) => { if (!menu.contains(e.target)) { menu.remove(); removeEventListener('mousedown', off, true) } }
   setTimeout(() => addEventListener('mousedown', off, true))
+}
+
+// ───────────── Invitar a un amigo ─────────────
+export async function openInvite() {
+  const { el, close } = layer('modal-bg')
+  const d = await window.humble.diag().catch(() => ({ version: '' }))
+  el.addEventListener('mousedown', (e) => { if (e.target === el) close() })
+  const step = (n, title, text) => h('div.step', h('div.step-n', String(n)), h('div', h('b', title), h('p', text)))
+  el.append(h('div.modal',
+    h('div.modal-body', h('h2', 'Invitar a un amigo'),
+      h('p.muted', 'No hay cuentas ni enlaces: tu amigo solo necesita la misma aplicación que tú.'),
+      step(1, 'Pásale la aplicación', 'El instalador (o el .zip / .AppImage / .pacman) que compilaste, por el medio que prefieras.'),
+      step(2, 'Que la abra', 'Ya está dentro: aparecerá en la lista de miembros en unos segundos, sin configurar nada.'),
+      step(3, 'Misma versión para todos', `Estás usando la ${d.version ? 'versión ' + d.version : 'versión actual'}. Si alguien no te ve, mira la barra lateral: avisa si es una versión distinta.`)),
+    h('div.modal-foot', h('button.btn.brand', { onclick: close }, 'Entendido'))))
 }
 
 // ───────────── Ajustes ─────────────
@@ -144,16 +179,16 @@ async function buildReport(voice) {
   return out.join('\n')
 }
 
-export function openSettings(voice) {
+export function openSettings(voice, startTab = 'account') {
   const { el, close } = layer('settings')
-  let tab = 'account'
+  let tab = startTab
   let meterStop = null
   const closeAll = () => { close(); el.dispatchEvent(new Event('dismiss')) }
   el.addEventListener('dismiss', () => meterStop?.())
 
   const nav = h('nav')
   const content = h('div.st-content')
-  const tabs = [['account', 'Mi cuenta'], ['voice', 'Voz'], ['diag', 'Diagnóstico'], ['about', 'Acerca de']]
+  const tabs = [['account', 'Mi cuenta'], ['voice', 'Voz y vídeo'], ['notif', 'Notificaciones'], ['diag', 'Diagnóstico'], ['about', 'Acerca de']]
 
   function render() {
     meterStop?.(); meterStop = null
@@ -161,7 +196,7 @@ export function openSettings(voice) {
       h('div.st-title', 'Ajustes de usuario'),
       ...tabs.map(([id, label]) => h('button.st-item' + (id === tab ? '.active' : ''), { onclick: () => { tab = id; render() } }, label))
     )
-    content.replaceChildren(({ account, voice: voiceTab, diag, about })[tab]())
+    content.replaceChildren(({ account, voice: voiceTab, notif, diag, about })[tab]())
   }
 
   function account() {
@@ -187,25 +222,40 @@ export function openSettings(voice) {
   function voiceTab() {
     const inSel = h('select')
     const outSel = h('select')
+    const camSel = h('select')
     const bar = h('div.meter-fill')
-    const fill = (sel, devs, cur) => {
-      sel.replaceChildren(h('option', { value: '' }, 'Predeterminado'), ...devs.map((d, i) => h('option', { value: d.deviceId, selected: d.deviceId === cur }, d.label || 'Dispositivo ' + (i + 1))))
+    const preview = h('video.cam-preview', { autoplay: true, muted: true, playsinline: true })
+    const none = h('div.cam-none', icon('cameraOff', 32), h('span', 'Sin cámara'))
+    const camBox = h('div.cam-box', preview, none)
+    let alive = true
+    let camStream = null
+    let meterOff = null
+
+    const fill = (sel, devs, cur, label) => {
+      sel.replaceChildren(h('option', { value: '' }, label), ...devs.map((d, i) => h('option', { value: d.deviceId, selected: d.deviceId === cur }, d.label || 'Dispositivo ' + (i + 1))))
     }
-    ;(async () => {
+    const real = (d) => d.deviceId !== 'default' && d.deviceId !== 'communications'
+
+    async function refresh() {
       let probe = null
       try { probe = await navigator.mediaDevices.getUserMedia({ audio: true }) } catch {}
       const devs = await navigator.mediaDevices.enumerateDevices()
       probe?.getTracks().forEach((t) => t.stop())
-      fill(inSel, devs.filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications'), state.prefs.input)
-      fill(outSel, devs.filter((d) => d.kind === 'audiooutput' && d.deviceId !== 'default' && d.deviceId !== 'communications'), state.prefs.output)
-      startMeter()
-    })()
+      if (!alive) return
+      const ins = devs.filter((d) => d.kind === 'audioinput' && real(d))
+      const outs = devs.filter((d) => d.kind === 'audiooutput' && real(d))
+      const cams = devs.filter((d) => d.kind === 'videoinput')
+      fill(inSel, ins, state.prefs.input, ins.length ? 'Predeterminado del sistema' : 'No se detecta ningún micrófono')
+      fill(outSel, outs, state.prefs.output, 'Predeterminado del sistema')
+      fill(camSel, cams, state.prefs.camera, cams.length ? 'Predeterminada del sistema' : 'No se detecta ninguna cámara')
+    }
 
     async function startMeter() {
       let stream, ctx, timer
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: state.prefs.input ? { deviceId: { exact: state.prefs.input } } : true })
       } catch { return }
+      if (!alive) return stream.getTracks().forEach((t) => t.stop())
       ctx = new AudioContext()
       const an = ctx.createAnalyser()
       an.fftSize = 512
@@ -217,22 +267,61 @@ export function openSettings(voice) {
         for (const v of buf) { const x = (v - 128) / 128; s += x * x }
         bar.style.width = Math.min(100, Math.sqrt(s / buf.length) * 400) + '%'
       }, 60)
-      meterStop = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); ctx.close() }
+      meterOff = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); ctx.close(); meterOff = null }
     }
+
+    async function startPreview() {
+      camStream?.getTracks().forEach((t) => t.stop())
+      camStream = null
+      preview.srcObject = null
+      camBox.classList.remove('on')
+      try {
+        camStream = await navigator.mediaDevices.getUserMedia({ video: state.prefs.camera ? { deviceId: { exact: state.prefs.camera } } : true })
+        if (!alive) return camStream.getTracks().forEach((t) => t.stop())
+        preview.srcObject = camStream
+        camBox.classList.add('on')
+      } catch { /* sin cámara o sin permiso: se queda "Sin cámara" */ }
+    }
+
+    const prevStop = meterStop
+    meterStop = () => { alive = false; meterOff?.(); camStream?.getTracks().forEach((t) => t.stop()); navigator.mediaDevices.removeEventListener('devicechange', onChange); prevStop?.() }
+    const onChange = async () => { await refresh(); startPreview() }
+    navigator.mediaDevices.addEventListener('devicechange', onChange)
 
     inSel.addEventListener('change', async () => {
       state.prefs.input = inSel.value; store('input', inSel.value)
-      meterStop?.(); await startMeter(); await voice.applyDevices()
+      meterOff?.(); await startMeter(); await voice.applyDevices()
     })
     outSel.addEventListener('change', () => { state.prefs.output = outSel.value; store('output', outSel.value); voice.applyDevices() })
+    camSel.addEventListener('change', async () => { state.prefs.camera = camSel.value; store('camera', camSel.value); await startPreview(); voice.applyCamera() })
+
+    refresh().then(() => { startMeter(); startPreview() })
 
     return h('div',
-      h('h2', 'Voz'),
-      h('label.field', 'Dispositivo de entrada', inSel),
-      h('label.field', 'Dispositivo de salida', outSel),
+      h('h2', 'Voz y vídeo'),
+      h('p.muted', 'Todo viene configurado: se usan los dispositivos predeterminados del sistema y, si conectas o desconectas unos auriculares, la app se adapta sola.'),
+      h('label.field', 'Dispositivo de entrada (micrófono)', inSel),
+      h('label.field', 'Dispositivo de salida (altavoces o auriculares)', outSel),
       h('div.field', h('div.label', 'Prueba de micrófono'), h('div.meter', bar)),
-      h('p.muted', 'La cancelación de eco, la supresión de ruido y el control automático de ganancia están activados.')
-    )
+      h('label.field', 'Cámara', camSel),
+      camBox,
+      h('p.muted', 'Cancelación de eco, supresión de ruido y control automático de ganancia: activados.'))
+  }
+
+  function notif() {
+    const sw = (label, help, key, storeKey) => {
+      const btn = h('button.switch' + (state.notify[key] ? '.on' : ''), { role: 'switch', 'aria-checked': String(state.notify[key]), onclick: () => {
+        state.notify[key] = !state.notify[key]
+        store(storeKey, state.notify[key])
+        btn.classList.toggle('on', state.notify[key])
+        btn.setAttribute('aria-checked', String(state.notify[key]))
+      } }, h('span.knob'))
+      return h('div.sw-row', h('div', h('div.sw-label', label), h('div.muted', help)), btn)
+    }
+    return h('div', h('h2', 'Notificaciones'),
+      sw('Avisos de escritorio', 'Un aviso del sistema cuando alguien escribe y no estás mirando la app.', 'desktop', 'notifyDesktop'),
+      sw('Sonidos de mensajes', 'Un sonido suave al recibir menciones o mensajes con la app en segundo plano.', 'sounds', 'notifySounds'),
+      h('p.muted', 'Las menciones (@tu nombre) siempre te marcan el canal en rojo.'))
   }
 
   function diag() {

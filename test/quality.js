@@ -27,7 +27,7 @@ const procTicks = (rootPid) => {
 // Xvfb: la lista de pantallas a veces llega vacía; se reintenta todo el gesto.
 async function startShare(p) {
   for (let i = 0; i < 4; i++) {
-    await p.page.locator('.round[title="Compartir pantalla"]').click()
+    await p.page.locator('.round[aria-label="Compartir pantalla"]').click()
     const card = p.page.locator('.src-card').first()
     if (await card.waitFor({ timeout: 15000 }).then(() => true, () => false)) {
       await card.click()

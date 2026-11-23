@@ -7,12 +7,17 @@ import { mountMembers } from './ui/members.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
 import { voice } from './voice.js'
 import { toast } from './ui/overlays.js'
+import { play } from './sounds.js'
+import { initTooltips } from './tooltip.js'
 
+const isFirstLaunch = !store('firstRun')
 const firstRun = store('firstRun') || (store('firstRun', Date.now()), Date.now())
 let shownText = null
 
 async function boot() {
+  initTooltips()
   const init = await window.humble.init()
+  state.firstRun = firstRun
   Object.assign(state, {
     me: init.me, server: init.server, channels: init.channels, status: init.status, platform: init.platform,
     pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers
@@ -32,7 +37,7 @@ async function boot() {
     state.platform === 'win32' && h('div#titlebar', icon('logo', 14), h('span', state.server)),
     h('div.shell',
       h('nav.rail',
-        h('div.rail-item.active', { title: state.server }, h('span.rail-pill'), h('div.rail-icon', h('span', state.server[0]))),
+        h('div.rail-item.active', { tip: state.server, tipPos: 'right' }, h('span.rail-pill'), h('div.rail-icon', h('span', state.server[0]))),
         h('div.rail-sep')),
       sidebar,
       h('main#main', chat, voiceView),
@@ -51,9 +56,16 @@ async function boot() {
     bus.emit('toggleMembers')
   })
   bus.on('unread', () => {
-    document.title = (state.unread.size ? `(${state.unread.size}) ` : '') + state.server
+    const pings = [...state.mentions.values()].reduce((a, b) => a + b, 0)
+    document.title = (pings ? `(${pings}) ` : state.unread.size ? '• ' : '') + state.server
   })
   window.addEventListener('focus', touchRead)
+  // Atajos como en Discord (dentro de la ventana): Ctrl+Mayús+M silencia, Ctrl+Mayús+D ensordece.
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey && e.shiftKey) || !state.voice) return
+    if (e.code === 'KeyM') { e.preventDefault(); voice.toggleMute() }
+    if (e.code === 'KeyD') { e.preventDefault(); voice.toggleDeafen() }
+  })
   document.addEventListener('click', (e) => {
     const a = e.target.closest?.('a.link')
     if (a) { e.preventDefault(); window.humble.openExternal(a.href) }
@@ -63,6 +75,7 @@ async function boot() {
   window.humble.onMessage(onMessage)
   onView()
   bus.emit('unread')
+  if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)
 }
 
 function onView() {
@@ -77,7 +90,12 @@ function onView() {
 
 function onMessage(msg) {
   switch (msg.type) {
-    case 'events': return onEvents(msg.evs)
+    case 'events': return onEvents(msg.evs, msg.updates)
+    case 'typing': {
+      const map = state.typing.get(msg.ch) || state.typing.set(msg.ch, new Map()).get(msg.ch)
+      map.set(msg.id, Date.now() + 6000)
+      return bus.emit('typing')
+    }
     case 'members':
       setMembers(msg.members)
       state.me.name = state.byId.get(state.me.id)?.name || state.me.name
@@ -88,22 +106,28 @@ function onMessage(msg) {
   }
 }
 
-function onEvents(evs) {
-  onEventsChat(evs)
+function onEvents(evs, updates) {
+  onEventsChat(evs, updates)
   for (const ev of evs) notifyFor(ev)
 }
 
 function notifyFor(ev) {
   if (ev.t !== 'msg' || ev.a === state.me.id) return
   const viewing = state.view.ch === ev.ch && document.hasFocus()
-  if (viewing) return
-  if (ev.ts > (state.lastRead[ev.ch] || firstRun)) {
-    if (!state.unread.has(ev.ch)) { state.unread.add(ev.ch); bus.emit('unread') }
+  const mentioned = ev.text.includes(`<@${state.me.id}>`)
+  if (!viewing && ev.ts > (state.lastRead[ev.ch] || firstRun)) {
+    let changed = false
+    if (!state.unread.has(ev.ch)) { state.unread.add(ev.ch); changed = true }
+    if (mentioned) { state.mentions.set(ev.ch, (state.mentions.get(ev.ch) || 0) + 1); changed = true }
+    if (changed) bus.emit('unread')
   }
-  if (Date.now() - ev.ts < 30000) { // no avisar del historial que llega al sincronizar
+  if (viewing || Date.now() - ev.ts > 30000) return // no avisar del historial que llega al sincronizar
+  if (state.notify.desktop) {
     const who = state.byId.get(ev.a)?.name || 'Alguien'
-    window.humble.notify({ title: `${who} · #${channel(ev.ch).name}`, body: ev.text || '📷 Imagen', ch: ev.ch }).catch(() => {})
+    const body = (ev.text || '📷 Imagen').replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + (state.byId.get(id)?.name || ''))
+    window.humble.notify({ title: `${who} · #${channel(ev.ch).name}`, body, ch: ev.ch }).catch(() => {})
   }
+  if (state.notify.sounds && (mentioned || !document.hasFocus())) play('message')
 }
 
 boot().catch((e) => {

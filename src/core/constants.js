@@ -19,7 +19,7 @@ const LIMITS = {
   blobChunk: 48 * 1024
 }
 
-const PROTOCOL = 2 // 2: eventos firmados
+const PROTOCOL = 3 // 2: eventos firmados · 3: editar, reaccionar y responder
 
 // Servidores STUN públicos para WebRTC (voz). No hay TURN: necesitaría un servidor.
 const ICE_SERVERS = [

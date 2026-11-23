@@ -107,8 +107,23 @@ async function startNode() {
   let batch = []
   node.on('event', (ev) => {
     batch.push(ev)
-    if (batch.length === 1) setTimeout(() => { const evs = batch; batch = []; send('events', { evs }) }, 40)
+    if (batch.length === 1) setTimeout(flushEvents, 40)
   })
+  function flushEvents() {
+    const list = batch
+    batch = []
+    const evs = []
+    const touched = new Set() // mensajes cuya edición/reacciones han cambiado
+    for (const ev of list) {
+      if (ev.t === 'msg') evs.push(node.store.decorate(ev))
+      else if (ev.t === 'edit' || ev.t === 'react') touched.add(ev.x)
+      else evs.push(ev)
+    }
+    const fresh = new Set(evs.filter((e) => e.t === 'msg').map((e) => `${e.a}:${e.n}`))
+    const updates = [...touched].filter((id) => !fresh.has(id)).map((id) => node.store.message(id)).filter(Boolean)
+    send('events', { evs, updates })
+  }
+  node.on('typing', (id, ch) => send('typing', { id, ch }))
   node.on('members', (members) => send('members', { members }))
   node.on('status', (status) => send('status', { status }))
   node.on('signal', (from, data) => send('signal', { from, data }))
@@ -118,10 +133,29 @@ async function startNode() {
 // ───────────── Ventana ─────────────
 function isOurs(url) { return typeof url === 'string' && url.startsWith('humble://app/') }
 
+// Tamaño y posición de la ventana: se recuerdan entre sesiones.
+const boundsFile = () => path.join(app.getPath('userData'), 'window.json')
+function loadBounds() {
+  try {
+    const b = JSON.parse(fs.readFileSync(boundsFile(), 'utf8'))
+    const { screen } = require('electron')
+    const visible = screen.getAllDisplays().some((d) => b.x >= d.bounds.x - 50 && b.y >= d.bounds.y - 50 && b.x < d.bounds.x + d.bounds.width - 100 && b.y < d.bounds.y + d.bounds.height - 100)
+    return { width: b.width, height: b.height, ...(visible ? { x: b.x, y: b.y } : {}), maximized: !!b.maximized }
+  } catch { return {} }
+}
+function saveBounds() {
+  if (!win || win.isDestroyed() || win.isMinimized()) return
+  try { fs.writeFileSync(boundsFile(), JSON.stringify({ ...win.getNormalBounds(), maximized: win.isMaximized() })) } catch {}
+}
+
+let forceClose = false
+
 function createWindow() {
+  const saved = process.env.HUMBLECHAT_W ? {} : loadBounds()
   win = new BrowserWindow({
-    width: Number(process.env.HUMBLECHAT_W) || 1280,
-    height: Number(process.env.HUMBLECHAT_H) || 800,
+    width: Number(process.env.HUMBLECHAT_W) || saved.width || 1280,
+    height: Number(process.env.HUMBLECHAT_H) || saved.height || 800,
+    ...(saved.x !== undefined ? { x: saved.x, y: saved.y } : {}),
     minWidth: 940,
     minHeight: 560,
     show: false,
@@ -139,7 +173,22 @@ function createWindow() {
       backgroundThrottling: false // la voz no debe degradarse al minimizar
     }
   })
-  win.once('ready-to-show', () => { if (!process.env.HUMBLECHAT_HIDDEN) win.show() })
+  win.once('ready-to-show', () => {
+    if (saved.maximized) win.maximize()
+    if (!process.env.HUMBLECHAT_HIDDEN) win.show()
+  })
+  let boundsTimer = null
+  for (const evt of ['resize', 'move']) win.on(evt, () => { clearTimeout(boundsTimer); boundsTimer = setTimeout(saveBounds, 600) })
+  // Cerrar la ventana en plena llamada la cortaría: se pregunta antes (en Discord se minimiza a la bandeja).
+  win.on('close', (e) => {
+    saveBounds()
+    if (forceClose || quitting || !node?.voice) return
+    e.preventDefault()
+    dialog.showMessageBox(win, {
+      type: 'question', buttons: ['Salir y colgar', 'Quedarme en la llamada'], defaultId: 1, cancelId: 1,
+      title: 'Estás en una llamada', message: 'Estás en una llamada de voz.', detail: 'Si cierras HumbleChat, saldrás de la llamada.'
+    }).then((r) => { if (r.response === 0) { forceClose = true; win?.close() } })
+  })
   win.on('closed', () => { win = null; rendererReady = false })
   win.on('focus', () => win.flashFrame(false))
 
@@ -231,12 +280,15 @@ function setupIpc() {
       channels: CHANNELS,
       limits: { blob: LIMITS.blob, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name },
       iceServers: network.iceServers,
-      platform: process.platform,
+      platform: process.env.HUMBLECHAT_FAKE_PLATFORM || process.platform, // solo pruebas: ver la barra de título de Windows
       pickerNeeded: !IS_WAYLAND // en Wayland ya pregunta el portal del sistema
     }
   })
   handle('history', (_e, ch, opts) => (typeof ch === 'string' ? node.history(ch, opts || {}) : []))
-  handle('send', (_e, m) => node.send(m.ch, m.text, m.att))
+  handle('send', (_e, m) => node.send(m.ch, m.text, m.att, m.re))
+  handle('edit', (_e, id, text) => node.edit(id, text))
+  handle('react', (_e, id, emoji, on) => node.react(id, emoji, on))
+  handle('typing', (_e, ch) => node.typing(ch))
   handle('remove', (_e, id) => node.remove(id))
   handle('setName', (_e, name) => node.setName(name))
   handle('setVoice', (_e, v) => node.setVoice(v))

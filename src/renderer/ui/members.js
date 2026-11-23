@@ -1,5 +1,6 @@
 // Lista de miembros (derecha): en línea / sin conexión.
 import { h, avatar, fill } from '../util.js'
+import { openProfile } from './popout.js'
 import { state, bus } from '../state.js'
 
 let root
@@ -12,7 +13,7 @@ export function mountMembers(el) {
 }
 
 function row(m) {
-  return h('div.member' + (m.online ? '' : '.offline'),
+  return h('div.member' + (m.online ? '' : '.offline'), { onclick: (e) => openProfile(e.currentTarget, m.id) },
     h('div.m-avatar', avatar(m, 32), h('span.status-dot' + (m.online ? '.online' : '.off'))),
     h('span.m-name', m.name + (m.id === state.me.id ? ' (tú)' : '')))
 }

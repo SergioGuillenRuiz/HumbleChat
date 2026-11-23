@@ -3,7 +3,8 @@
 // así que dos nodos se sincronizan comparando un vector {autor: último n contiguo}.
 // Da igual quién esté conectado o quién fuera el primero: la unión de los registros es el historial.
 //
-// Tipos de evento:  msg (mensaje) · del (borrar uno propio) · prof (nombre de usuario)
+// Tipos de evento:  msg (mensaje, opcionalmente respuesta) · del (borrar uno propio) · edit (editar uno propio)
+//                   react (poner/quitar una reacción) · prof (nombre de usuario)
 const fs = require('fs')
 const path = require('path')
 const { CHANNELS, LIMITS } = require('./constants')
@@ -11,6 +12,7 @@ const { cleanName } = require('./identity')
 const { verify, HEX128 } = require('./sign')
 
 const HEX64 = /^[0-9a-f]{64}$/
+const EVENT_ID = /^[0-9a-f]{64}:\d{1,10}$/
 const TEXT_CHANNELS = new Set(CHANNELS.filter((c) => c.type === 'text').map((c) => c.id))
 
 const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max
@@ -41,10 +43,23 @@ function cleanEvent(e) {
       ev.att = e.att.map(cleanAttachment)
       if (ev.att.includes(null)) return null
     }
+    if (e.re !== undefined && e.re !== null) {
+      if (typeof e.re !== 'string' || !EVENT_ID.test(e.re)) return null
+      ev.re = e.re
+    }
     if (!ev.text.trim() && !(ev.att && ev.att.length)) return null
   } else if (e.t === 'del') {
-    if (!/^[0-9a-f]{64}:\d{1,10}$/.test(e.x)) return null
+    if (!EVENT_ID.test(e.x)) return null
     ev.x = e.x
+  } else if (e.t === 'edit') {
+    if (!EVENT_ID.test(e.x) || !str(e.text, LIMITS.text) || !e.text.trim()) return null
+    ev.x = e.x
+    ev.text = e.text
+  } else if (e.t === 'react') {
+    if (!EVENT_ID.test(e.x) || typeof e.e !== 'string' || e.e.length < 1 || e.e.length > 24 || /[\s\p{Cc}]/u.test(e.e) || typeof e.on !== 'boolean') return null
+    ev.x = e.x
+    ev.e = e.e
+    ev.on = e.on
   } else if (e.t === 'prof') {
     ev.name = cleanName(e.name)
     if (!ev.name) return null
@@ -65,6 +80,8 @@ class Store {
     this.chan = new Map(CHANNELS.filter((c) => c.type === 'text').map((c) => [c.id, []])) // msgs ordenados
     this.deleted = new Set() // ids borrados (aunque aún no haya llegado el msg)
     this.names = new Map() // autor -> { name, n }
+    this.edits = new Map() // id del mensaje -> { text, n } (la última edición de su autor)
+    this.reacts = new Map() // id -> Map(emoji -> Map(autor -> { on, n }))
     this.out = null
     this.pendingWrite = []
     this.flushTimer = null
@@ -141,6 +158,16 @@ class Store {
           if (i >= 0) list.splice(i, 1)
         }
       }
+    } else if (ev.t === 'edit') {
+      if (ev.x.startsWith(ev.a + ':')) { // solo puedes editar lo tuyo
+        const cur = this.edits.get(ev.x)
+        if (!cur || ev.n > cur.n) this.edits.set(ev.x, { text: ev.text, n: ev.n })
+      }
+    } else if (ev.t === 'react') {
+      const byEmoji = this.reacts.get(ev.x) || this.reacts.set(ev.x, new Map()).get(ev.x)
+      const byUser = byEmoji.get(ev.e) || byEmoji.set(ev.e, new Map()).get(ev.e)
+      const cur = byUser.get(ev.a)
+      if (!cur || ev.n > cur.n) byUser.set(ev.a, { on: ev.on, n: ev.n })
     } else if (ev.t === 'prof') {
       const cur = this.names.get(ev.a)
       if (!cur || ev.n > cur.n) this.names.set(ev.a, { name: ev.name, n: ev.n })
@@ -179,6 +206,35 @@ class Store {
     return out
   }
 
+  /** Mensaje con sus ediciones, reacciones y la vista previa de a quién responde. */
+  decorate(ev) {
+    if (ev.t !== 'msg') return ev
+    const id = idOf(ev)
+    const out = { ...ev }
+    const ed = this.edits.get(id)
+    if (ed) { out.text = ed.text; out.edited = true }
+    const rs = this.reacts.get(id)
+    if (rs) {
+      const list = [...rs]
+        .map(([e, users]) => ({ e, users: [...users].filter(([, v]) => v.on).map(([a]) => a) }))
+        .filter((r) => r.users.length)
+      if (list.length) out.reactions = list
+    }
+    if (ev.re) {
+      const t = this.events.get(ev.re)
+      out.reply = t && t.t === 'msg' && !this.deleted.has(ev.re)
+        ? { id: ev.re, a: t.a, text: (this.edits.get(ev.re)?.text ?? t.text).slice(0, 140), att: !!t.att?.length }
+        : { id: ev.re, missing: true }
+    }
+    return out
+  }
+
+  /** Mensaje (decorado) por id, o null si no existe o está borrado. */
+  message(id) {
+    const ev = this.events.get(id)
+    return ev && ev.t === 'msg' && !this.deleted.has(id) ? this.decorate(ev) : null
+  }
+
   history(ch, { beforeTs = null, beforeId = null, limit = 60 } = {}) {
     const list = this.chan.get(ch) || []
     let end = list.length
@@ -193,7 +249,7 @@ class Store {
       }
       end = lo
     }
-    return list.slice(Math.max(0, end - limit), end)
+    return list.slice(Math.max(0, end - limit), end).map((e) => this.decorate(e))
   }
 
   last(ch) {

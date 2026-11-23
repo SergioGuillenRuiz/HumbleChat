@@ -8,6 +8,7 @@ import { store } from './util.js'
 const links = new Map() // id remoto -> Link
 let mic = null
 let screen = null
+let camStream = null
 let roster = null // quién estaba en la sala la última vez (para sonidos de entrada/salida)
 let ac = null
 const meters = new Map() // 'me' | id -> { an, buf, until }
@@ -27,7 +28,7 @@ const dbg = () => store('dbg') || {} // ajustes de depuración (solo para medir)
 
 // ───────────── API pública ─────────────
 export const voice = {
-  join, leave, sync, onSignal, toggleMute, toggleDeafen, startShare, stopShare, watch, getVolume, setVolume, applyDevices, diagnostics
+  join, leave, sync, onSignal, toggleMute, toggleDeafen, startShare, stopShare, watch, getVolume, setVolume, applyDevices, applyCamera, toggleCamera, diagnostics
 }
 
 export async function diagnostics() {
@@ -49,7 +50,7 @@ export function isMuted() { return !!state.voice && (state.voice.muted || state.
 
 function publish() {
   const v = state.voice
-  window.humble.setVoice(v ? { ch: v.ch, mute: v.muted || v.deafened, deaf: v.deafened, share: v.sharing } : null).catch(() => {})
+  window.humble.setVoice(v ? { ch: v.ch, mute: v.muted || v.deafened, deaf: v.deafened, share: v.sharing, cam: !!v.cam } : null).catch(() => {})
 }
 
 async function getMic() {
@@ -67,14 +68,58 @@ async function getMic() {
   return stream
 }
 
+/** Mensaje con instrucciones según el error y el sistema, en lugar de un "no funciona" genérico. */
+function explainMediaError(e, what) {
+  const dev = what === 'cam' ? 'la cámara' : 'el micrófono'
+  const name = e?.name
+  if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+    return `No se encuentra ${dev}. Conéctalo y vuelve a pulsar el botón; se detecta solo.`
+  }
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return state.platform === 'win32'
+      ? `Windows no deja usar ${dev} a la app. Abre Configuración → Privacidad y seguridad → ${what === 'cam' ? 'Cámara' : 'Micrófono'} y activa el acceso para aplicaciones de escritorio.`
+      : `El sistema no deja usar ${dev}. Comprueba los permisos de audio (PipeWire/PulseAudio) y que no esté silenciado.`
+  }
+  if (name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError') {
+    return `${what === 'cam' ? 'La cámara' : 'El micrófono'} está en uso por otro programa o no responde. Ciérralo e inténtalo de nuevo.`
+  }
+  return `No se pudo usar ${dev} (${name || 'error desconocido'}).`
+}
+
+async function getCamera() {
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+  if (state.prefs.camera) {
+    try { return await navigator.mediaDevices.getUserMedia({ video: { ...base, deviceId: { exact: state.prefs.camera } } }) } catch {}
+  }
+  return navigator.mediaDevices.getUserMedia({ video: base })
+}
+
+/** Si un dispositivo guardado ya no existe (auriculares que no están), se vuelve al predeterminado del sistema. */
+async function dropMissingDevices() {
+  const devs = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  if (!devs.some((d) => d.deviceId)) return [] // sin permiso aún: no se ven los ids
+  const lost = []
+  for (const [pref, kind] of [['input', 'audioinput'], ['output', 'audiooutput'], ['camera', 'videoinput']]) {
+    if (state.prefs[pref] && !devs.some((d) => d.kind === kind && d.deviceId === state.prefs[pref])) {
+      state.prefs[pref] = ''
+      store(pref, '')
+      lost.push(pref)
+    }
+  }
+  return lost
+}
+
 async function join(ch) {
   if (state.voice?.ch === ch) return true
   if (state.voice) await leave(false)
+  await dropMissingDevices()
   let noMic = false
-  try { mic = await getMic() } catch { mic = null; noMic = true }
-  state.voice = { ch, muted: noMic, deafened: false, sharing: false, noMic }
-  if (noMic) toast('No se pudo usar el micrófono: entras solo para escuchar. Revisa Ajustes → Voz.', 'warn')
-  if (mic) startMeter('me', mic)
+  let micErr = null
+  try { mic = await getMic() } catch (e) { mic = null; noMic = true; micErr = e }
+  state.voice = { ch, muted: noMic, deafened: false, sharing: false, noMic, cam: false }
+  if (noMic) toast('Entras solo para escuchar. ' + explainMediaError(micErr, 'mic'), 'warn', 10000)
+  if (mic) { startMeter('me', mic); watchMic() }
+  navigator.mediaDevices.ondevicechange = onDeviceChange
   applyMute()
   roster = null
   publish()
@@ -89,8 +134,10 @@ async function join(ch) {
 async function leave(sound = true) {
   if (!state.voice) return
   stopShare(false)
+  stopCamera(false)
+  navigator.mediaDevices.ondevicechange = null
   for (const id of [...links.keys()]) closeLink(id)
-  mic?.getTracks().forEach((t) => t.stop())
+  mic?.getTracks().forEach((t) => { t.onended = null; t.stop() })
   mic = null
   clearInterval(qualityTimer)
   meters.clear()
@@ -100,6 +147,7 @@ async function leave(sound = true) {
   state.voice = null
   state.watching = null
   state.streams.clear()
+  state.cams.clear()
   roster = null
   publish()
   if (sound) play('leave')
@@ -117,7 +165,7 @@ function applyMute() {
 function toggleMute() {
   const v = state.voice
   if (!v) return
-  if (v.noMic) return toast('No hay micrófono disponible. Revisa Ajustes → Voz.', 'warn')
+  if (v.noMic) return void reacquireMic('Micrófono listo: ya puedes hablar.') // sin micro: el botón vuelve a intentarlo
   if (v.deafened) { v.deafened = false; v.muted = false; play('undeafen') } // como Discord: reactivar el micro al ensordecer-desensordecer
   else { v.muted = !v.muted; play(v.muted ? 'mute' : 'unmute') }
   applyMute(); publish(); bus.emit('voice')
@@ -148,6 +196,9 @@ function sync() {
     if (!sharer || sharer.voice?.ch !== v.ch || !sharer.voice.share) watch(null)
   }
   for (const id of [...state.speaking]) if (id !== state.me.id && !present.has(id)) { state.speaking.delete(id); bus.emit('speaking') }
+  let cams = false
+  for (const id of [...state.cams.keys()]) if (id !== state.me.id && !state.byId.get(id)?.voice?.cam) { state.cams.delete(id); cams = true }
+  if (cams) bus.emit('streams')
 }
 
 function onSignal(from, data) {
@@ -205,6 +256,10 @@ class Link {
     this.settingAnswer = false
     this.viewer = false // ¿me ha pedido ver mi pantalla?
     this.screenSender = null
+    this.camSender = null
+    this.remoteCam = null // id del flujo de cámara y de pantalla del otro (para distinguir los vídeos)
+    this.remoteScr = null
+    this.unknown = []
     this.queue = Promise.resolve()
     this.rebuilds = 0
     this.closed = false
@@ -238,6 +293,8 @@ class Link {
     pc.onsignalingstatechange = () => { if (pc.signalingState === 'stable') this.tune() }
     this.tune()
     if (state.watching === id) this.send({ k: 'w', on: true })
+    if (camStream) this.syncCamera()
+    this.sendRoles()
   }
 
   send(msg) { window.humble.signal(this.id, msg).catch(() => {}) }
@@ -268,6 +325,14 @@ class Link {
       }
     } else if (m.k === 'c') {
       try { await pc.addIceCandidate(m.c) } catch (e) { if (!this.ignoreOffer) throw e }
+    } else if (m.k === 's') { // qué flujo es cámara y cuál pantalla
+      this.remoteCam = typeof m.cam === 'string' ? m.cam : null
+      this.remoteScr = typeof m.scr === 'string' ? m.scr : null
+      if (!this.remoteCam && state.cams.delete(this.id)) bus.emit('streams')
+      if (!this.remoteScr && this.id !== state.watching && state.streams.delete(this.id)) bus.emit('streams')
+      const pending = this.unknown
+      this.unknown = []
+      for (const u of pending) this.classify(u.sid, u.track)
     } else if (m.k === 'w') {
       this.viewer = !!m.on
       this.syncScreen()
@@ -283,22 +348,48 @@ class Link {
       this.audio.play().catch(() => {})
       startMeter(this.id, stream)
     } else if (e.track.kind === 'video') {
-      state.streams.set(this.id, new MediaStream([e.track]))
-      bus.emit('streams')
+      this.classify(e.streams[0]?.id, e.track)
+    }
+  }
+
+  /** ¿Cámara o pantalla? Lo dice el id del flujo, que el otro nos anuncia con {k:'s'}. */
+  classify(sid, track) {
+    if (sid && sid === this.remoteCam) state.cams.set(this.id, new MediaStream([track]))
+    else if (sid && sid === this.remoteScr) state.streams.set(this.id, new MediaStream([track]))
+    else { this.unknown.push({ sid, track }); return }
+    bus.emit('streams')
+  }
+
+  sendRoles() { this.send({ k: 's', cam: camStream?.id ?? null, scr: screen?.id ?? null }) }
+
+  syncCamera() {
+    if (camStream && !this.camSender) {
+      this.camSender = this.pc.addTrack(camStream.getVideoTracks()[0], camStream)
+      const tr = this.pc.getTransceivers().find((t) => t.sender === this.camSender)
+      if (tr) preferCodecs(tr, ['video/VP8'])
+      this.tune()
+    } else if (!camStream && this.camSender) {
+      const tr = this.pc.getTransceivers().find((t) => t.sender === this.camSender)
+      try { this.pc.removeTrack(this.camSender) } catch {}
+      try { tr?.stop() } catch {}
+      this.camSender = null
     }
   }
 
   /** Calidad de los emisores. Se reintenta tras negociar porque antes puede no haber "encodings". */
   tune() {
     if (this.closed) return
-    // En malla se codifica una vez POR espectador: con 3 o más se baja la resolución para cuidar CPU y subida.
+    // En malla se codifica una vez POR espectador/amigo: con muchos se baja la resolución para cuidar CPU y subida.
     const viewers = [...links.values()].filter((l) => l.screenSender).length
-    const scale = viewers >= 3 ? 1.5 : 1
+    const screenScale = viewers >= 3 ? 1.5 : 1
+    const camScale = links.size >= 4 ? 1.5 : 1
     for (const sender of this.pc.getSenders()) {
       if (!sender.track) continue
       const audio = sender.track.kind === 'audio'
-      const maxBitrate = audio ? dbg().audioBitrate || AUDIO_BITRATE : Math.round((dbg().bitrate || screenPreset.bitrate) / (scale > 1 ? 1.6 : 1))
-      const fps = dbg().fps || screenPreset.fps
+      const cam = sender === this.camSender
+      const scale = audio ? 1 : cam ? camScale : screenScale
+      const fps = cam ? 30 : dbg().fps || screenPreset.fps
+      const maxBitrate = audio ? dbg().audioBitrate || AUDIO_BITRATE : cam ? Math.round(1_200_000 / scale) : Math.round((dbg().bitrate || screenPreset.bitrate) / (scale > 1 ? 1.6 : 1))
       try {
         const p = sender.getParameters()
         if (!p.encodings?.length) continue
@@ -396,6 +487,7 @@ class Link {
     this.audio.srcObject = null
     meters.delete(this.id)
     state.streams.delete(this.id)
+    state.cams.delete(this.id)
   }
 }
 
@@ -447,7 +539,7 @@ async function startShare() {
   track.addEventListener('ended', () => stopShare())
   state.voice.sharing = true
   state.streams.set(state.me.id, screen) // vista previa propia
-  for (const l of links.values()) l.syncScreen()
+  for (const l of links.values()) { l.syncScreen(); l.sendRoles() }
   publish()
   bus.emit('voice')
   bus.emit('streams')
@@ -459,7 +551,7 @@ function stopShare(update = true) {
   screen = null
   state.streams.delete(state.me.id)
   if (state.watching === state.me.id) state.watching = null
-  for (const l of links.values()) l.syncScreen()
+  for (const l of links.values()) { l.syncScreen(); l.sendRoles() }
   if (state.voice) state.voice.sharing = false
   if (update) { publish(); bus.emit('voice'); bus.emit('streams') }
 }
@@ -488,17 +580,110 @@ function setVolume(id, v) {
 async function applyDevices() {
   setSoundOutput(state.prefs.output)
   for (const l of links.values()) if (l.audio.setSinkId) l.audio.setSinkId(state.prefs.output || '').catch(() => {})
-  if (state.voice && mic) { // cambiar de micro en caliente
-    try {
-      const next = await getMic()
-      const track = next.getAudioTracks()[0]
-      for (const l of links.values()) for (const s of l.pc.getSenders()) if (s.track?.kind === 'audio') await s.replaceTrack(track)
-      mic.getTracks().forEach((t) => t.stop())
-      mic = next
-      meters.delete('me')
-      startMeter('me', mic)
-      applyMute()
-    } catch { toast('No se pudo cambiar de micrófono.', 'warn') }
+  if (state.voice && mic) await reacquireMic() // cambiar de micro en caliente
+}
+
+// ───────────── Cámara ─────────────
+async function startCamera() {
+  const v = state.voice
+  if (!v || camStream) return
+  try { camStream = await getCamera() } catch (e) { camStream = null; toast(explainMediaError(e, 'cam'), 'warn', 10000); return }
+  const track = camStream.getVideoTracks()[0]
+  track.contentHint = 'motion'
+  track.addEventListener('ended', () => { if (camStream) { stopCamera(); toast('Se ha desconectado la cámara.', 'warn') } })
+  v.cam = true
+  state.cams.set(state.me.id, camStream)
+  for (const l of links.values()) { l.syncCamera(); l.sendRoles() }
+  publish()
+  bus.emit('voice')
+  bus.emit('streams')
+}
+
+function stopCamera(update = true) {
+  if (!camStream) return
+  camStream.getTracks().forEach((t) => t.stop())
+  camStream = null
+  state.cams.delete(state.me.id)
+  if (state.voice) state.voice.cam = false
+  for (const l of links.values()) { l.syncCamera(); l.sendRoles() }
+  if (update) { publish(); bus.emit('voice'); bus.emit('streams') }
+}
+
+async function toggleCamera() {
+  if (!state.voice) return
+  if (camStream) stopCamera()
+  else await startCamera()
+}
+
+/** Cambio de cámara desde Ajustes: si está encendida, se reinicia con la nueva. */
+async function applyCamera() {
+  if (!camStream) return
+  stopCamera(false)
+  await startCamera()
+}
+
+// ───────────── Micrófono en caliente (conectar/desconectar auriculares) ─────────────
+function watchMic() {
+  const t = mic?.getAudioTracks()[0]
+  if (t) t.onended = () => reacquireMic('Se desconectó tu micrófono: se usa el predeterminado del sistema.')
+}
+
+async function setMicTrack(track) {
+  for (const l of links.values()) {
+    const tr = l.pc.getTransceivers().find((x) => x.receiver.track.kind === 'audio')
+    if (!tr) continue
+    await tr.sender.replaceTrack(track)
+    if (tr.direction === 'recvonly') tr.direction = 'sendrecv' // entraste sin micro: ahora ya envías
+  }
+}
+
+async function reacquireMic(message) {
+  if (!state.voice) return false
+  const wasNoMic = state.voice.noMic
+  let next
+  try { next = await getMic() } catch (e) { toast(explainMediaError(e, 'mic'), 'warn', 10000); return false }
+  if (!state.voice) return next.getTracks().forEach((t) => t.stop())
+  await setMicTrack(next.getAudioTracks()[0])
+  mic?.getTracks().forEach((t) => { t.onended = null; t.stop() })
+  mic = next
+  watchMic()
+  meters.delete('me')
+  startMeter('me', mic)
+  state.voice.noMic = false
+  if (wasNoMic) state.voice.muted = false
+  applyMute()
+  for (const l of links.values()) l.tune()
+  publish()
+  bus.emit('voice')
+  if (message) toast(message, 'ok')
+  return true
+}
+
+let lastDefaultIn = ''
+let deviceTimer = null
+function onDeviceChange() {
+  clearTimeout(deviceTimer)
+  deviceTimer = setTimeout(handleDevices, 500)
+}
+
+async function handleDevices() {
+  if (!state.voice) return
+  const devs = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  const ins = devs.filter((d) => d.kind === 'audioinput')
+  const def = ins.find((d) => d.deviceId === 'default')?.groupId || ''
+  const curId = mic?.getAudioTracks()[0]?.getSettings().deviceId
+  if (state.voice.noMic && ins.length) await reacquireMic('Se ha detectado un micrófono: ya puedes hablar.')
+  else if (mic && curId && !ins.some((d) => d.deviceId === curId)) await reacquireMic('Se desconectó tu micrófono: se usa el predeterminado del sistema.')
+  else if (mic && !state.prefs.input && def && lastDefaultIn && def !== lastDefaultIn) await reacquireMic('Has cambiado el micrófono predeterminado: la app lo sigue.')
+  lastDefaultIn = def
+  const lost = await dropMissingDevices()
+  if (lost.includes('output')) {
+    await applyDevices()
+    toast('Se desconectó la salida de audio elegida: se usa la predeterminada del sistema.', 'warn')
+  }
+  if (camStream) {
+    const id = camStream.getVideoTracks()[0]?.getSettings().deviceId
+    if (id && !devs.some((d) => d.kind === 'videoinput' && d.deviceId === id)) { stopCamera(); toast('Se ha desconectado la cámara.', 'warn') }
   }
 }
 

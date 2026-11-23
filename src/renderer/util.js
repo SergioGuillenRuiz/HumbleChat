@@ -13,6 +13,8 @@ export function h(sel, props, ...kids) {
     if (v === undefined || v === null || v === false) continue
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v)
     else if (k === 'dataset') Object.assign(el.dataset, v)
+    else if (k === 'tip') { el.dataset.tip = v; el.setAttribute('aria-label', v) }
+    else if (k === 'tipPos') el.dataset.tipPos = v
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v)
     else if (k === 'html') el.innerHTML = v // solo para SVG propios, nunca para texto de usuarios
     else if (k in el && k !== 'list') el[k] = v
@@ -56,7 +58,7 @@ export function avatar(member, size = 40, extra = '') {
   const name = member?.name || '?'
   return h('div.avatar' + (extra ? '.' + extra : ''), {
     style: { width: size + 'px', height: size + 'px', background: colorFor(member?.id || name), fontSize: Math.round(size * 0.46) + 'px' }
-  }, [...name.trim()][0]?.toUpperCase() || '?')
+  }, size >= 20 ? ([...name.trim()][0]?.toUpperCase() || '?') : '')
 }
 
 const pad = (n) => String(n).padStart(2, '0')

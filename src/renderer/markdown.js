@@ -1,6 +1,7 @@
 // Markdown estilo Discord, construido con nodos DOM (nunca innerHTML): **negrita**, *cursiva*,
 // ~~tachado~~, `código`, ```bloque```, > cita y enlaces automáticos.
 import { h } from './util.js'
+import { state, member } from './state.js'
 
 const INLINE = new RegExp([
   '(`+)([\\s\\S]*?[^`])\\1(?!`)', // 1,2 código
@@ -8,7 +9,8 @@ const INLINE = new RegExp([
   '(?<![\\w*])\\*([^\\s*](?:[\\s\\S]*?[^\\s*])?)\\*(?![\\w*])', // 4 cursiva *
   '(?<![\\w_])_([^\\s_](?:[\\s\\S]*?[^\\s_])?)_(?![\\w_])', // 5 cursiva _
   '~~([\\s\\S]+?)~~', // 6 tachado
-  '(https?:\\/\\/[^\\s<>]+[^\\s<>.,;:!?\'")\\]])' // 7 enlace
+  '(https?:\\/\\/[^\\s<>]+[^\\s<>.,;:!?\'")\\]])', // 7 enlace
+  '<@([0-9a-f]{64})>' // 8 mención
 ].join('|'), 'g')
 
 function inline(text, into) {
@@ -21,6 +23,7 @@ function inline(text, into) {
     else if (m[5] !== undefined) into.append(inline(m[5], h('em')))
     else if (m[6] !== undefined) into.append(inline(m[6], h('s')))
     else if (m[7] !== undefined) into.append(h('a.link', { href: m[7], title: m[7], rel: 'noopener noreferrer' }, m[7]))
+    else if (m[8] !== undefined) into.append(h('span.mention' + (m[8] === state.me?.id ? '.me' : ''), { dataset: { uid: m[8] } }, '@' + member(m[8]).name))
     last = m.index + m[0].length
   }
   if (last < text.length) into.append(text.slice(last))

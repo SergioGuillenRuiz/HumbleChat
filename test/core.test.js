@@ -12,6 +12,7 @@ const { topicOf } = require('../src/core/groupkey')
 const { encodeJSON, Decoder } = require('../src/core/frames')
 const { Store } = require('../src/core/store')
 const { sign } = require('../src/core/sign')
+const { PROTOCOL } = require('../src/core/constants')
 const { proofOf } = require('../src/core/groupkey')
 const DHT = require('hyperdht')
 
@@ -241,7 +242,7 @@ test('un compañero con la llave pero malicioso no puede inyectar mensajes en no
   ev.sig = sign(mal.keyPair.secretKey, ev)
   mal.on('connection', (conn) => {
     conn.on('error', () => {})
-    conn.write(encodeJSON({ t: 'hello', v: 2, proof: proofOf(K, conn.handshakeHash), name: 'mal' }))
+    conn.write(encodeJSON({ t: 'hello', v: PROTOCOL, proof: proofOf(K, conn.handshakeHash), name: 'mal' }))
     conn.write(encodeJSON({ t: 'ev', e: ev }))
     conn.write(encodeJSON({ t: 'evs', list: [ev] }))
   })
@@ -252,6 +253,70 @@ test('un compañero con la llave pero malicioso no puede inyectar mensajes en no
   assert.ok(!texts(b).some((t) => t.includes('FALSO')), 'B no acepta el evento falso')
   assert.ok(!texts(a).some((t) => t.includes('FALSO')))
   await mal.destroy()
+})
+
+test('editar, reaccionar y responder: se replican, solo el autor edita y las reacciones se pueden quitar', async () => {
+  const K = newKey()
+  const a = await spawn(K)
+  const b = await spawn(K)
+  await waitFor(() => a.peers.has(b.id), 15000, 'conectados')
+  const m1 = a.send('general', 'texto con errata')
+  const id1 = `${m1.a}:${m1.n}`
+  await waitFor(() => texts(b).includes('texto con errata'), 5000, 'B recibe')
+  const view = (n, id) => n.history('general', { limit: 50 }).find((e) => `${e.a}:${e.n}` === id)
+
+  // editar: el autor sí, otro no
+  assert.equal(b.edit(id1, 'b intenta editar lo de a'), null)
+  a.edit(id1, 'texto corregido')
+  await waitFor(() => view(b, id1)?.text === 'texto corregido', 5000, 'B ve la edición')
+  assert.equal(view(b, id1).edited, true)
+  assert.equal(view(a, id1).edited, true)
+
+  // reacciones: dos usuarios, y quitar
+  b.react(id1, '👍', true)
+  a.react(id1, '👍', true)
+  a.react(id1, '🎉', true)
+  await waitFor(() => view(a, id1)?.reactions?.find((r) => r.e === '👍')?.users.length === 2, 5000, 'dos 👍')
+  await waitFor(() => view(b, id1)?.reactions?.length === 2, 5000, 'B ve las 2 reacciones')
+  b.react(id1, '👍', false)
+  await waitFor(() => view(a, id1)?.reactions?.find((r) => r.e === '👍')?.users.length === 1, 5000, 'B quita su 👍')
+  a.react(id1, '🎉', false)
+  await waitFor(() => view(b, id1)?.reactions?.length === 1, 5000, 'desaparece 🎉')
+
+  // responder: la respuesta lleva vista previa del original; si se borra, queda como "no disponible"
+  const r = b.send('general', 'respuesta', [], id1)
+  await waitFor(() => view(a, `${r.a}:${r.n}`)?.reply?.text === 'texto corregido', 5000, 'A ve la respuesta con vista previa')
+  assert.equal(view(a, `${r.a}:${r.n}`).reply.a, a.id)
+  a.remove(id1)
+  await waitFor(() => view(b, `${r.a}:${r.n}`)?.reply?.missing === true, 5000, 'original borrado')
+
+  // "está escribiendo…" llega a los conectados
+  let who = null
+  a.on('typing', (id, ch) => { who = { id, ch } })
+  b.typing('general')
+  await waitFor(() => who, 5000, 'typing')
+  assert.deepEqual(who, { id: b.id, ch: 'general' })
+})
+
+test('ediciones y reacciones válidas llegan aunque el mensaje original llegue después, y las falsas se ignoran', () => {
+  const s = new Store(tmp())
+  s.open()
+  const A = DHT.keyPair()
+  const B = DHT.keyPair()
+  const ha = A.publicKey.toString('hex')
+  const hb = B.publicKey.toString('hex')
+  const mk = (kp, n, fields) => { const e = { a: kp.publicKey.toString('hex'), n, ts: 100 + n, ...fields }; e.sig = sign(kp.secretKey, e); return e }
+  const target = `${ha}:1`
+  assert.equal(s.add(mk(A, 2, { t: 'edit', x: target, text: 'editado' })), 'new') // la edición llega primero
+  assert.equal(s.add(mk(B, 1, { t: 'edit', x: target, text: 'edición ajena' })), 'new') // firmada por B pero el mensaje es de A
+  assert.equal(s.add(mk(B, 2, { t: 'react', x: target, e: '👍', on: true })), 'new')
+  assert.equal(s.add(mk(A, 1, { t: 'msg', ch: 'general', text: 'original' })), 'new')
+  const m = s.history('general')[0]
+  assert.equal(m.text, 'editado', 'solo cuenta la edición del autor')
+  assert.deepEqual(m.reactions, [{ e: '👍', users: [hb] }])
+  assert.equal(s.add(mk(A, 3, { t: 'react', x: target, e: 'con espacio', on: true })), 'bad', 'emoji inválido')
+  assert.equal(s.add(mk(A, 3, { t: 'edit', x: target, text: '   ' })), 'bad', 'edición vacía')
+  assert.equal(s.add(mk(A, 3, { t: 'msg', ch: 'general', text: 'x', re: 'no-es-un-id' })), 'bad', 'respuesta con id inválido')
 })
 
 test('persistencia: el historial sobrevive a un reinicio', async () => {
