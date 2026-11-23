@@ -12,13 +12,16 @@
 const { EventEmitter } = require('events')
 const crypto = require('crypto')
 const path = require('path')
+const fs = require('fs')
 const Hyperswarm = require('hyperswarm')
+const DHT = require('hyperdht')
 const { CHANNELS, LIMITS, PROTOCOL } = require('./constants')
 const { encodeJSON, encodeBlob, Decoder } = require('./frames')
 const { loadIdentity } = require('./identity')
-const { Store } = require('./store')
+const { Store, cleanEvent } = require('./store')
 const { Blobs } = require('./blobs')
 const { topicOf, proofOf } = require('./groupkey')
+const { sign } = require('./sign')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const VOICE_IDS = new Set(CHANNELS.filter((c) => c.type === 'voice').map((c) => c.id))
@@ -85,13 +88,17 @@ class ChatNode extends EventEmitter {
    * @param {object} o
    * @param {string} o.dir        carpeta de datos (identidad, historial, adjuntos)
    * @param {string} o.groupKey   llave del grupo
+   * @param {string[]} [o.bootstrap] nodos de arranque propios ("host:puerto"); por defecto los públicos
    * @param {object} [o.dht]      DHT ya creada (tests con red local)
+   * @param {object} [o.dhtOpts]  opciones extra para la DHT (solo tests: host 127.0.0.1)
    */
-  constructor({ dir, groupKey, dht = undefined }) {
+  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {} }) {
     super()
     this.dir = dir
     this.groupKey = groupKey
+    this.bootstrap = bootstrap
     this.injectedDht = dht
+    this.dhtOpts = dhtOpts
     this.peers = new Map() // id -> Peer (autenticados)
     this.all = new Set()
     this.voice = null
@@ -114,7 +121,14 @@ class ChatNode extends EventEmitter {
 
     if (this.store.names.get(this.id)?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name })
 
-    this.swarm = new Hyperswarm({ keyPair: this.identity.keyPair, dht: this.injectedDht })
+    // Nodos de la DHT conocidos de la última vez: permiten arrancar aunque los nodos de arranque públicos no respondan.
+    this.nodesFile = path.join(this.dir, 'dht-nodes.json')
+    const dht = this.injectedDht || new DHT({
+      ...(this.bootstrap ? { bootstrap: this.bootstrap } : {}),
+      nodes: this._loadNodes(),
+      ...this.dhtOpts
+    })
+    this.swarm = new Hyperswarm({ keyPair: this.identity.keyPair, dht })
     this.swarm.on('connection', (conn) => this._onConnection(conn))
     this.swarm.on('error', () => {})
     this.swarm.dht.on('network-update', () => this._refreshState())
@@ -123,9 +137,12 @@ class ChatNode extends EventEmitter {
     this.connectTimer = setTimeout(() => { if (!this.ready) this._setState('offline') }, 15000)
     this.pumpTimer = setInterval(() => this._pumpBlobs(), 20000)
     this.pumpTimer.unref?.()
+    this.nodesTimer = setInterval(() => this._saveNodes(), 5 * 60 * 1000)
+    this.nodesTimer.unref?.()
     this.swarm.flush().then(() => {
       this.ready = true
       this._refreshState()
+      this._saveNodes()
     }, () => {})
     this._setState('connecting')
   }
@@ -135,11 +152,29 @@ class ChatNode extends EventEmitter {
     this.stopped = true
     clearTimeout(this.connectTimer)
     clearInterval(this.pumpTimer)
+    clearInterval(this.nodesTimer)
+    this._saveNodes()
     for (const p of [...this.all]) { p.send({ t: 'bye' }); }
     await new Promise((r) => setTimeout(r, 50))
     try { await this.swarm.destroy() } catch {}
     for (const h of [...this.blobs.receiving.keys()]) this.blobs.abort(h)
     await this.store.close()
+  }
+
+  _loadNodes() {
+    try {
+      const nodes = JSON.parse(fs.readFileSync(this.nodesFile, 'utf8'))
+      return nodes.filter((n) => n && typeof n.host === 'string' && Number.isInteger(n.port)).slice(0, 100)
+    } catch { return [] }
+  }
+
+  _saveNodes() {
+    try {
+      const nodes = this.swarm.dht.toArray({ limit: 64 })
+      if (!nodes.length) return
+      fs.writeFileSync(this.nodesFile + '.tmp', JSON.stringify(nodes))
+      fs.renameSync(this.nodesFile + '.tmp', this.nodesFile)
+    } catch {}
   }
 
   suspend() { try { this.swarm.suspend() } catch {} }
@@ -158,7 +193,10 @@ class ChatNode extends EventEmitter {
     this.emit('status', this.status())
   }
 
-  status() { return { state: this.state, peers: this.peers.size } }
+  status() {
+    const outdated = !!this.mismatch && Date.now() - this.mismatch.at < 60000
+    return { state: this.state, peers: this.peers.size, ...(outdated ? { mismatch: true } : {}) }
+  }
 
   _members() {
     const ids = new Set(this.store.members().keys())
@@ -200,18 +238,38 @@ class ChatNode extends EventEmitter {
 
   history(ch, opts) { return this.store.history(ch, opts) }
 
+  /** Estado de la red para la pestaña Diagnóstico (sin IPs). */
+  diagnostics() {
+    const link = (p) => {
+      const addr = p.conn.rawStream?.remoteHost || ''
+      return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|f[cd])/i.test(addr) ? 'red local' : 'directa'
+    }
+    return {
+      status: this.status(),
+      peers: [...this.peers.values()].map((p) => ({ name: this.store.names.get(p.id)?.name || p.name || p.id.slice(0, 6), link: link(p) }))
+    }
+  }
+
   // ───────────────────────── acciones locales ─────────────────────────
 
   _author(fields) {
     const ts = Math.max(Date.now(), this.lastTs + 1)
     this.lastTs = ts
     const ev = { a: this.id, n: this.store.nextN(this.id), ts, ...fields }
+    ev.sig = sign(this.identity.keyPair.secretKey, this._canonical(ev))
     if (this.store.add(ev) !== 'new') throw new Error('Evento inválido')
     const stored = this.store.events.get(`${ev.a}:${ev.n}`)
     this.emit('event', stored)
     if (stored.t === 'prof') this._emitMembers()
     this._broadcast({ t: 'ev', e: stored })
     return stored
+  }
+
+  // La firma se calcula sobre la versión normalizada del evento (la misma que verificarán los demás).
+  _canonical(ev) {
+    const clean = cleanEvent({ ...ev, sig: '0'.repeat(128) })
+    if (!clean) throw new Error('Evento inválido')
+    return clean
   }
 
   send(ch, text, att) {
@@ -293,10 +351,15 @@ class ChatNode extends EventEmitter {
   _onMessage(peer, m) {
     if (!m || typeof m !== 'object') return
     if (!peer.ready) {
-      if (m.t !== 'hello' || m.v !== PROTOCOL || typeof m.proof !== 'string') return peer.close()
+      if (m.t !== 'hello' || typeof m.proof !== 'string') return peer.close()
       const want = Buffer.from(proofOf(this.groupKey, peer.conn.handshakeHash))
       const got = Buffer.from(m.proof)
       if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) return peer.close() // llave distinta
+      if (m.v !== PROTOCOL) { // es de los nuestros (conoce la llave) pero con otra versión de la app: avisar, no callar
+        this.mismatch = { v: m.v, at: Date.now() }
+        this.emit('status', this.status())
+        return peer.close()
+      }
       peer.ready = true
       peer.name = typeof m.name === 'string' ? m.name.slice(0, LIMITS.name) : null
       peer.voice = cleanVoice(m.voice)

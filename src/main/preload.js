@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('humble', {
   listScreens: call('listScreens'),
   chooseScreen: call('chooseScreen'),
   notify: call('notify'),
+  diag: call('diag'),
   openExternal: call('openExternal'),
   onMessage: (cb) => ipcRenderer.on('hc', (_e, msg) => cb(msg))
 })

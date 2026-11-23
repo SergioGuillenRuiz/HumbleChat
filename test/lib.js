@@ -17,7 +17,7 @@ async function startNet() {
   return { testnet, bootstrap: `${b.host}:${b.port}`, key: crypto.randomBytes(32).toString('hex') }
 }
 
-async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile = null } = {}) {
+async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile = null, env: extraEnv = {} } = {}) {
   if (!profile) {
     profile = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-e2e-'))
     fs.mkdirSync(path.join(profile, 'data'), { recursive: true })
@@ -30,7 +30,10 @@ async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile
     ...(net.bootstrap ? { HUMBLECHAT_BOOTSTRAP: net.bootstrap } : {}),
     ...(packaged ? {} : { HUMBLECHAT_KEY: net.key }), // empaquetada: usa la group.key incluida
     HUMBLECHAT_NO_SANDBOX: '1',
-    ...(fakeMedia ? { HUMBLECHAT_FAKE_MEDIA: '1' } : {})
+    ...(fakeMedia ? { HUMBLECHAT_FAKE_MEDIA: '1' } : {}),
+    HUMBLECHAT_W: String(size[0]),
+    HUMBLECHAT_H: String(size[1]),
+    ...extraEnv
   }
   const app = await _electron.launch({ executablePath: electronPath, args: [...(packaged ? [] : [ROOT]), '--no-sandbox', '--disable-gpu'], env })
   const page = await app.firstWindow()

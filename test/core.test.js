@@ -11,6 +11,9 @@ const { ChatNode } = require('../src/core/node')
 const { topicOf } = require('../src/core/groupkey')
 const { encodeJSON, Decoder } = require('../src/core/frames')
 const { Store } = require('../src/core/store')
+const { sign } = require('../src/core/sign')
+const { proofOf } = require('../src/core/groupkey')
+const DHT = require('hyperdht')
 
 const newKey = () => crypto.randomBytes(32).toString('hex')
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hc-test-'))
@@ -155,25 +158,100 @@ test('si dos amigos no pueden conectarse directamente, los mensajes y adjuntos l
   assert.ok(ev)
 })
 
+test('un amigo con otra versión de la app se detecta y se avisa; un extraño sin la llave no puede provocar el aviso', async () => {
+  const K = newKey()
+  const a = await spawn(K)
+  const old = new Hyperswarm({ dht: testnet.createNode() })
+  const stranger = new Hyperswarm({ dht: testnet.createNode() })
+  old.on('connection', (conn) => { conn.on('error', () => {}); conn.write(encodeJSON({ t: 'hello', v: 1, proof: proofOf(K, conn.handshakeHash), name: 'viejo' })) })
+  old.join(topicOf(K), { server: true, client: true })
+  await old.flush()
+  await waitFor(() => a.status().mismatch === true, 10000, 'aviso de versión distinta')
+  await old.destroy()
+
+  const b = await spawn(newKey())
+  stranger.on('connection', (conn) => { conn.on('error', () => {}); conn.write(encodeJSON({ t: 'hello', v: 1, proof: 'bb'.repeat(32), name: 'x' })) })
+  stranger.join(topicOf(b.groupKey), { server: true, client: true })
+  await stranger.flush()
+  await new Promise((r) => setTimeout(r, 1200))
+  assert.equal(b.status().mismatch, undefined, 'sin la llave no se provoca el aviso')
+  await stranger.destroy()
+})
+
 test('el store rechaza basura y reordena por (ts, id); el decoder tolera trozos partidos', () => {
   const dir = tmp()
   const s = new Store(dir)
   s.open()
-  const A = 'a'.repeat(64)
-  assert.equal(s.add({ a: A, n: 1, ts: 5, t: 'msg', ch: 'nope', text: 'x' }), 'bad')
-  assert.equal(s.add({ a: A, n: 1, ts: 5, t: 'msg', ch: 'general', text: '' }), 'bad')
-  assert.equal(s.add({ a: A, n: 2, ts: 3, t: 'msg', ch: 'general', text: 'segundo' }), 'new')
+  const kp = DHT.keyPair()
+  const A = kp.publicKey.toString('hex')
+  const mk = (n, ts, fields) => { const e = { a: A, n, ts, ...fields }; e.sig = sign(kp.secretKey, e); return e }
+  assert.equal(s.add(mk(1, 5, { t: 'msg', ch: 'nope', text: 'x' })), 'bad')
+  assert.equal(s.add(mk(1, 5, { t: 'msg', ch: 'general', text: '' })), 'bad')
+  assert.equal(s.add(mk(2, 3, { t: 'msg', ch: 'general', text: 'segundo' })), 'new')
   assert.deepEqual(s.vector(), {}) // hueco: falta n=1, el vector no avanza
-  assert.equal(s.add({ a: A, n: 1, ts: 9, t: 'msg', ch: 'general', text: 'primero' }), 'new')
+  assert.equal(s.add(mk(1, 9, { t: 'msg', ch: 'general', text: 'primero' })), 'new')
   assert.deepEqual(s.vector(), { [A]: 2 })
   assert.deepEqual(s.history('general').map((e) => e.text), ['segundo', 'primero'])
-  assert.equal(s.add({ a: A, n: 1, ts: 9, t: 'msg', ch: 'general', text: 'primero' }), 'dup')
+  assert.equal(s.add(mk(1, 9, { t: 'msg', ch: 'general', text: 'primero' })), 'dup')
 
   const frames = []
   const d = new Decoder((m) => frames.push(m), () => {}, (e) => { throw e })
   const buf = Buffer.concat([encodeJSON({ x: 1 }), encodeJSON({ y: 'ñ' })])
   for (let i = 0; i < buf.length; i += 3) d.push(buf.subarray(i, i + 3))
   assert.deepEqual(frames, [{ x: 1 }, { y: 'ñ' }])
+})
+
+test('firmas: no se puede suplantar, alterar ni borrar lo de otro', () => {
+  const s = new Store(tmp())
+  s.open()
+  const victim = DHT.keyPair()
+  const attacker = DHT.keyPair()
+  const V = victim.publicKey.toString('hex')
+  const real = { a: V, n: 1, ts: 100, t: 'msg', ch: 'general', text: 'lo dije yo' }
+  real.sig = sign(victim.secretKey, real)
+
+  // 1) El atacante firma con SU clave un evento que dice ser de la víctima.
+  const forged = { a: V, n: 1, ts: 100, t: 'msg', ch: 'general', text: 'dinero a esta cuenta' }
+  forged.sig = sign(attacker.secretKey, forged)
+  assert.equal(s.add(forged), 'bad', 'suplantación rechazada')
+  // 2) Sin firma, o con la firma de otro mensaje.
+  assert.equal(s.add({ ...real, sig: undefined }), 'bad', 'sin firma')
+  assert.equal(s.add({ ...real, text: 'otra cosa' }), 'bad', 'texto alterado tras firmar')
+  assert.equal(s.add({ ...real, ts: 101 }), 'bad', 'fecha alterada')
+  assert.equal(s.add({ ...real, ch: 'fotos' }), 'bad', 'canal alterado')
+  // 3) La auténtica entra, y la falsa ya no puede "pisar" el n=1.
+  assert.equal(s.add(real), 'new')
+  assert.equal(s.add(forged), 'dup')
+  assert.deepEqual(s.history('general').map((e) => e.text), ['lo dije yo'])
+  // 4) Borrar el mensaje de otro: el atacante firma un "del" como si fuera la víctima.
+  const evilDel = { a: V, n: 2, ts: 200, t: 'del', x: `${V}:1` }
+  evilDel.sig = sign(attacker.secretKey, evilDel)
+  assert.equal(s.add(evilDel), 'bad')
+  assert.equal(s.history('general').length, 1)
+})
+
+test('un compañero con la llave pero malicioso no puede inyectar mensajes en nombre de otro', async () => {
+  const K = newKey()
+  const a = await spawn(K)
+  const b = await spawn(K)
+  await waitFor(() => a.peers.has(b.id), 15000, 'conectados')
+  // Un tercero con la llave correcta (pasa la autenticación de grupo) intenta suplantar a A ante B.
+  const mal = new Hyperswarm({ dht: testnet.createNode() })
+  const ev = { a: a.id, n: 999, ts: Date.now(), t: 'msg', ch: 'general', text: 'MENSAJE FALSO de ' + a.name }
+  ev.sig = sign(mal.keyPair.secretKey, ev)
+  mal.on('connection', (conn) => {
+    conn.on('error', () => {})
+    conn.write(encodeJSON({ t: 'hello', v: 2, proof: proofOf(K, conn.handshakeHash), name: 'mal' }))
+    conn.write(encodeJSON({ t: 'ev', e: ev }))
+    conn.write(encodeJSON({ t: 'evs', list: [ev] }))
+  })
+  mal.join(topicOf(K), { server: true, client: true })
+  await mal.flush()
+  await waitFor(() => b.peers.size === 2, 10000, 'B ve al malicioso')
+  await new Promise((r) => setTimeout(r, 800))
+  assert.ok(!texts(b).some((t) => t.includes('FALSO')), 'B no acepta el evento falso')
+  assert.ok(!texts(a).some((t) => t.includes('FALSO')))
+  await mal.destroy()
 })
 
 test('persistencia: el historial sobrevive a un reinicio', async () => {
@@ -184,4 +262,82 @@ test('persistencia: el historial sobrevive a un reinicio', async () => {
   await a.stop()
   const a2 = await spawn(K, dir)
   assert.ok(texts(a2).some((t) => t.startsWith('persistente')))
+})
+
+// ───────────── Red: nodos en caché, nodo propio, STUN ─────────────
+const dgram = require('dgram')
+const { startOwnNode } = require('../scripts/own-node')
+const { loadNetwork } = require('../src/core/network')
+
+function loopbackNode(dir, key, extra = {}) {
+  const n = new ChatNode({ dir, groupKey: key, dhtOpts: { host: '127.0.0.1' }, ...extra })
+  n.testDir = dir
+  nodes.push(n)
+  return n
+}
+
+test('los nodos de la DHT se guardan y permiten arrancar sin nodos de arranque', async () => {
+  const K = newKey()
+  const dirX = tmp()
+  const x = loopbackNode(dirX, K, { bootstrap: testnet.bootstrap })
+  await x.start()
+  await waitFor(() => x.ready, 15000, 'X listo')
+  await x.stop()
+  const cached = JSON.parse(fs.readFileSync(path.join(dirX, 'dht-nodes.json'), 'utf8'))
+  assert.ok(cached.length >= 1, 'se guardaron nodos')
+
+  const z = loopbackNode(tmp(), K, { bootstrap: testnet.bootstrap })
+  await z.start()
+  // Y no tiene NINGÚN nodo de arranque: solo la caché de X.
+  const y = loopbackNode(dirX, K, { bootstrap: [] })
+  await y.start()
+  await waitFor(() => y.peers.has(z.id) && z.peers.has(y.id), 20000, 'Y encuentra a Z solo con la caché')
+
+  // Control: sin caché y sin nodos de arranque, nadie puede encontrar a nadie.
+  const w = loopbackNode(tmp(), K, { bootstrap: [] })
+  await w.start()
+  await new Promise((r) => setTimeout(r, 3000))
+  assert.equal(w.peers.size, 0, 'sin caché no hay descubrimiento')
+})
+
+test('nodo propio (DHT + STUN): los amigos se encuentran sin ningún servicio público', async () => {
+  const own = await startOwnNode({ host: '127.0.0.1', dhtPort: 0 + 41000 + Math.floor(Math.random() * 2000), stunPort: 43000 + Math.floor(Math.random() * 2000), bind: '127.0.0.1' })
+  try {
+    const K = newKey()
+    const boot = [`127.0.0.1:${own.dht.address().port}`]
+    const a = loopbackNode(tmp(), K, { bootstrap: boot })
+    const b = loopbackNode(tmp(), K, { bootstrap: boot })
+    await a.start(); await b.start()
+    a.send('general', 'por mi propio nodo')
+    await waitFor(() => a.peers.has(b.id) && texts(b).includes('por mi propio nodo'), 20000, 'A y B vía nodo propio')
+
+    // STUN: una Binding Request devuelve la dirección de quien pregunta (XOR-MAPPED-ADDRESS).
+    const client = dgram.createSocket('udp4')
+    await new Promise((resolve) => client.bind(0, '127.0.0.1', resolve))
+    const req = Buffer.alloc(20)
+    req.writeUInt16BE(0x0001, 0); req.writeUInt32BE(0x2112a442, 4); crypto.randomBytes(12).copy(req, 8)
+    const reply = await new Promise((resolve, reject) => {
+      client.once('message', resolve)
+      setTimeout(() => reject(new Error('STUN sin respuesta')), 3000)
+      client.send(req, own.stun.address().port, '127.0.0.1')
+    })
+    assert.equal(reply.readUInt16BE(0), 0x0101)
+    assert.ok(reply.subarray(8, 20).equals(req.subarray(8, 20)), 'mismo transaction id')
+    const port = reply.readUInt16BE(26) ^ 0x2112
+    const ip = [0, 1, 2, 3].map((i) => reply[28 + i] ^ [0x21, 0x12, 0xa4, 0x42][i]).join('.')
+    assert.equal(ip, '127.0.0.1')
+    assert.equal(port, client.address().port)
+    client.close()
+  } finally { await own.close() }
+})
+
+test('network.json sustituye los servicios por defecto y se ignora si es inválido', () => {
+  const d = tmp()
+  assert.equal(loadNetwork({ userDataDir: d }).bootstrap, undefined)
+  fs.writeFileSync(path.join(d, 'network.json'), JSON.stringify({ bootstrap: ['203.0.113.7:49737', 'basura'], stun: ['203.0.113.7:3478'] }))
+  const n = loadNetwork({ userDataDir: d })
+  assert.deepEqual(n.bootstrap, ['203.0.113.7:49737'])
+  assert.deepEqual(n.iceServers, [{ urls: ['stun:203.0.113.7:3478'] }])
+  fs.writeFileSync(path.join(d, 'network.json'), '{ no es json')
+  assert.equal(loadNetwork({ userDataDir: d }).bootstrap, undefined)
 })

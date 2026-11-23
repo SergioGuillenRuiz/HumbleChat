@@ -5,3 +5,5 @@ group.key
 .DS_Store
 /test/.tmp/
 /test/shots/
+network.json
+/test/voice-like.wav

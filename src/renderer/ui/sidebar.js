@@ -30,7 +30,9 @@ const STATUS = {
 function render() {
   const text = state.channels.filter((c) => c.type === 'text')
   const voices = state.channels.filter((c) => c.type === 'voice')
-  const [stText, stKind] = STATUS[state.status.state] || []
+  const [stText, stKind] = state.status.mismatch
+    ? ['Un amigo tiene otra versión de la app: instalad todos la misma', 'warn']
+    : STATUS[state.status.state] || []
 
   fill(root,
     h('div.sb-header', h('span.sb-name', state.server), icon('chevron', 18)),
@@ -77,12 +79,15 @@ function vuser(m) {
     (v?.mute || v?.deaf) && h('span.vstate', icon(v.deaf ? 'headphonesOff' : 'micOff', 16)))
 }
 
+const pingClass = (ms) => (ms == null || ms < 120 ? '' : ms < 250 ? '.warn' : '.bad')
+
 function callPanel() {
   const c = state.channels.find((x) => x.id === state.voice.ch)
   return h('div.callpanel',
     h('div.cp-top',
       h('div.cp-info',
-        h('div.cp-state', icon('signal', 16), 'Voz conectada'),
+        h('div.cp-state' + pingClass(state.voice.ping), icon('signal', 16), 'Voz conectada',
+          state.voice.ping != null && h('span.cp-ping', state.voice.ping + ' ms')),
         h('div.cp-where', `${c?.name || ''} / ${state.server}`)),
       h('button.icon-btn', { title: 'Desconectar', onclick: () => voice.leave() }, icon('hangup', 20))),
     h('div.cp-actions',

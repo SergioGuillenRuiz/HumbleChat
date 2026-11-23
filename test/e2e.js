@@ -6,6 +6,7 @@
 const fs = require('fs')
 const path = require('path')
 const { startNet, launch, sleep, waitFor } = require('./lib')
+const { file: WAV } = require('./make-wav') // audio tipo voz para medir el bitrate real de Opus
 
 const SHOTS = path.join(__dirname, 'shots')
 fs.mkdirSync(SHOTS, { recursive: true })
@@ -18,7 +19,7 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
 ;(async () => {
   const net = await startNet()
   const apps = []
-  const spawn = async (name, o) => { const p = await launch(net, name, o); apps.push(p); return p }
+  const spawn = async (name, o = {}) => { const p = await launch(net, name, { ...o, env: { HUMBLECHAT_FAKE_AUDIO_FILE: WAV, ...o.env } }); apps.push(p); return p }
   try {
     console.log('Descubrimiento automático (nadie configura nada)')
     const a = await spawn('Sergio') // el primero: hostea la sesión
@@ -79,8 +80,28 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     ok('y de B a A')
     await shot(b, '05-voz')
 
+    await waitFor(async () => (await count(a, '.cp-ping')) === 1, 15000, 'ping visible en el panel de llamada')
+    ok('el panel de llamada muestra el ping')
+    await a.page.locator('.up-btns .icon-btn').last().click() // Ajustes
+    await a.page.locator('.st-item', { hasText: 'Diagnóstico' }).click()
+    let kbps = 0
+    await waitFor(async () => {
+      const t = await a.page.locator('pre.diag').textContent()
+      const m = /audio ↑ opus (\d+) kbps/.exec(t)
+      kbps = m ? Number(m[1]) : 0
+      return kbps > 0
+    }, 20000, 'diagnóstico con bitrate de audio')
+    if (kbps < 45 || kbps > 90) throw new Error('bitrate de audio fuera de lo esperado (64 kbps): ' + kbps)
+    ok(`diagnóstico: Opus a ${kbps} kbps (objetivo 64)`)
+    const rep = await a.page.locator('pre.diag').textContent()
+    if (/\d+\.\d+\.\d+\.\d+/.test(rep.replace(/HumbleChat \d+\.\d+\.\d+/, '').replace(/Electron \d+\.\d+\.\d+/, ''))) throw new Error('el informe no debe contener IPs')
+    ok('el informe de diagnóstico no contiene IPs')
+    await shot(a, '09-diagnostico')
+    await a.page.keyboard.press('Escape')
+
     console.log('Pantalla compartida')
     await a.page.locator('.round[title="Compartir pantalla"]').click()
+    await a.page.locator('.seg-item', { hasText: 'Nitidez' }).click() // elegir calidad en el diálogo
     await a.page.locator('.src-card').first().click()
     await waitFor(async () => (await count(a, '.tile-live')) > 0, 15000, 'A en directo')
     await waitFor(async () => (await count(b, '.tile-watch')) > 0, 10000, 'B ve el botón de ver')
@@ -92,6 +113,22 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
     await a.page.locator('.round.on').click() // dejar de compartir
     await waitFor(async () => (await count(b, '.theater')) === 0, 10000, 'B deja de ver al cortar')
     ok('al dejar de compartir se limpia la vista')
+
+    // Volver a compartir en la misma llamada (antes degradaba a ~1 fps por reutilizar el transceptor).
+    await a.page.locator('.round[title="Compartir pantalla"]').click()
+    if ((await a.page.locator('.seg-item.active').textContent()).indexOf('Nitidez') < 0) throw new Error('la calidad elegida no se recuerda')
+    await a.page.locator('.src-card').first().click()
+    await waitFor(async () => (await count(b, '.tile-watch')) > 0, 20000, 'B ve de nuevo el botón')
+    await b.page.locator('.tile-watch').click()
+    await waitFor(() => b.page.evaluate(() => { const v = document.querySelector('.theater video'); return !!v && v.videoWidth > 0 }), 20000, 'B recibe vídeo otra vez')
+    await sleep(9000)
+    await a.page.evaluate(async () => (await import('/voice.js')).diagnostics())
+    await sleep(3000)
+    const d2 = (await a.page.evaluate(async () => (await import('/voice.js')).diagnostics())).find((x) => x.videoOut)
+    if (!d2 || d2.videoOut.fps < 15 || d2.videoOut.w < 1280) throw new Error('el 2.º vídeo compartido sale degradado: ' + JSON.stringify(d2?.videoOut))
+    ok(`recompartir funciona: ${d2.videoOut.codec} ${d2.videoOut.w}x${d2.videoOut.h} @${d2.videoOut.fps} fps`)
+    await a.page.locator('.round.on').click()
+    await waitFor(async () => (await count(b, '.theater')) === 0, 10000, 'B deja de ver')
 
     console.log('Si el primero se va, la sesión sigue')
     const profileA = a.profile

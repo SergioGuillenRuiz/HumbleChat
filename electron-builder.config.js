@@ -22,6 +22,11 @@ module.exports = {
     {
       "from": "group.key",
       "to": "group.key"
+    },
+    {
+      "from": ".",
+      "to": ".",
+      "filter": ["network.json"]
     }
   ],
   "win": {
@@ -68,6 +73,7 @@ module.exports = {
     "icon": "build/icon.png",
     "category": "Network;Chat;AudioVideo;",
     "synopsis": "Chat privado de texto y voz",
+    "desktop": { "entry": { "StartupWMClass": "humblechat" } },
     "artifactName": "HumbleChat-${version}.${ext}",
     "maintainer": "HumbleChat <noreply@users.noreply.github.com>"
   },

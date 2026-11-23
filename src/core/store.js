@@ -8,6 +8,7 @@ const fs = require('fs')
 const path = require('path')
 const { CHANNELS, LIMITS } = require('./constants')
 const { cleanName } = require('./identity')
+const { verify, HEX128 } = require('./sign')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const TEXT_CHANNELS = new Set(CHANNELS.filter((c) => c.type === 'text').map((c) => c.id))
@@ -29,7 +30,8 @@ function cleanAttachment(a) {
 function cleanEvent(e) {
   if (!e || typeof e !== 'object') return null
   if (!HEX64.test(e.a) || !isInt(e.n, 1, 1e9) || !Number.isFinite(e.ts)) return null
-  const ev = { a: e.a, n: e.n, ts: Math.floor(e.ts), t: e.t }
+  if (typeof e.sig !== 'string' || !HEX128.test(e.sig)) return null
+  const ev = { a: e.a, n: e.n, ts: Math.floor(e.ts), t: e.t, sig: e.sig }
   if (e.t === 'msg') {
     if (!TEXT_CHANNELS.has(e.ch) || !str(e.text, LIMITS.text)) return null
     ev.ch = e.ch
@@ -99,11 +101,12 @@ class Store {
     this.pendingWrite = []
   }
 
-  /** @returns {'new'|'dup'} */
+  /** @returns {'new'|'dup'|'bad'}  Rechaza lo mal formado y lo que no lleve la firma válida de su autor. */
   add(raw) {
     const ev = cleanEvent(raw)
     if (!ev) return 'bad'
     if (this.events.has(idOf(ev))) return 'dup'
+    if (!verify(ev)) return 'bad'
     this._insert(ev)
     this.pendingWrite.push(JSON.stringify(ev) + '\n')
     if (!this.flushTimer) {

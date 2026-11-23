@@ -55,27 +55,44 @@ export function confirmModal({ title, body, confirm = 'Aceptar', danger = false 
   })
 }
 
-// ───────────── Elegir qué pantalla compartir ─────────────
-export async function pickScreenSource() {
+// ───────────── Compartir pantalla: qué y con qué calidad ─────────────
+const SHARE_PRESETS = [['fluid', 'Fluidez', '1080p · 60 fps · para juegos y vídeo'], ['sharp', 'Nitidez', '1080p · 30 fps · para texto y código']]
+
+/** @returns {Promise<{id: string|null, preset: string}|null>}  id null = elegirá el portal del sistema (Wayland). */
+export async function openShareDialog({ needSource }) {
   let sources = []
-  toast('Buscando pantallas y ventanas…')
-  try { sources = await window.humble.listScreens() } catch {}
-  if (!sources.length) { toast('No se encontró ninguna pantalla para compartir.', 'warn'); return null }
+  if (needSource) {
+    toast('Buscando pantallas y ventanas…')
+    try { sources = await window.humble.listScreens() } catch {}
+    if (!sources.length) { toast('No se encontró ninguna pantalla para compartir.', 'warn'); return null }
+  }
   return new Promise((resolve) => {
     const { el, close } = layer('modal-bg')
     let done = false
+    let preset = store('preset') || 'fluid'
     const finish = (v) => { if (done) return; done = true; close(); resolve(v) }
     el.addEventListener('dismiss', () => finish(null))
     el.addEventListener('mousedown', (e) => { if (e.target === el) finish(null) })
-    const card = (s) => h('button.src-card', { onclick: () => finish(s.id) },
-      h('img', { src: s.thumb, alt: '' }), h('span', s.name))
+
+    const seg = h('div.seg')
+    const drawSeg = () => seg.replaceChildren(...SHARE_PRESETS.map(([id, label, detail]) =>
+      h('button.seg-item' + (id === preset ? '.active' : ''), { onclick: () => { preset = id; store('preset', id); drawSeg() } },
+        h('b', label), h('small', detail))))
+    drawSeg()
+
+    const card = (s) => h('button.src-card', { onclick: () => finish({ id: s.id, preset }) }, h('img', { src: s.thumb, alt: '' }), h('span', s.name))
     el.append(h('div.modal.wide',
-      h('div.modal-body', h('h2', 'Compartir pantalla'),
-        h('div.src-grid', ...sources.filter((s) => s.screen).map(card)),
-        sources.some((s) => !s.screen) && h('h3', 'Ventanas'),
-        h('div.src-grid', ...sources.filter((s) => !s.screen).map(card))),
-      h('div.modal-foot', h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'))
-    ))
+      h('div.modal-body',
+        h('h2', 'Compartir pantalla'),
+        h('h3', 'Calidad'), seg,
+        needSource
+          ? [h('h3', 'Pantallas'), h('div.src-grid', ...sources.filter((s) => s.screen).map(card)),
+             sources.some((s) => !s.screen) && h('h3', 'Ventanas'),
+             h('div.src-grid', ...sources.filter((s) => !s.screen).map(card))]
+          : h('p.muted', 'Después, el sistema te preguntará qué pantalla o ventana quieres compartir.')),
+      h('div.modal-foot',
+        h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'),
+        !needSource && h('button.btn.brand', { onclick: () => finish({ id: null, preset }) }, 'Continuar'))))
   })
 }
 
@@ -99,6 +116,34 @@ export function openVolumeMenu(x, y, id, voice) {
 }
 
 // ───────────── Ajustes ─────────────
+async function buildReport(voice) {
+  const line = (k, v) => `${k.padEnd(22)} ${v}`
+  const d = await window.humble.diag()
+  const out = [
+    'HumbleChat ' + d.version + ' · ' + d.platform + ' ' + d.arch + ' · Electron ' + d.electron,
+    line('Red P2P', { online: 'conectada', connecting: 'buscando…', offline: 'sin Internet' }[d.status.state] || d.status.state),
+    line('Servicios de red', d.network),
+    ...(d.status.mismatch ? [line('¡Atención!', 'un amigo tiene OTRA VERSIÓN de la app y no puede conectarse')] : []),
+    line('Amigos conectados', d.peers.length + (d.peers.length ? '  (' + d.peers.map((p) => p.name + ' ' + p.link).join(', ') + ')' : '')),
+    ''
+  ]
+  const calls = state.voice ? await voice.diagnostics() : []
+  out.push(line('Llamada', state.voice ? state.channels.find((c) => c.id === state.voice.ch)?.name : 'no estás en una llamada'))
+  const f = (x) => (x === null || x === undefined ? '—' : x)
+  for (const c of calls) {
+    const name = state.byId.get(c.id)?.name || c.id.slice(0, 6)
+    const st = { connected: 'conectado', connecting: 'conectando', new: 'iniciando', disconnected: 'desconectado', failed: 'FALLIDO', closed: 'cerrado' }[c.state] || c.state
+    out.push('', `· ${name}: ${st}, ${c.path}, ping ${f(c.rtt)} ms`)
+    if (c.audioOut) out.push(`    audio ↑ ${f(c.audioOut.codec)} ${f(c.audioOut.kbps)} kbps`)
+    if (c.audioIn) out.push(`    audio ↓ ${f(c.audioIn.kbps)} kbps · jitter ${f(c.audioIn.jitter)} ms · pérdida ${f(c.audioIn.lostPct)} %`)
+    for (const [k, arrow] of [['videoOut', '↑'], ['videoIn', '↓']]) {
+      const v = c[k]
+      if (v) out.push(`    vídeo ${arrow} ${f(v.codec)} ${v.w ? v.w + 'x' + v.h : ''} ${f(v.fps)} fps ${f(v.kbps)} kbps${v.limit ? ' · limitado por ' + v.limit : ''}`)
+    }
+  }
+  return out.join('\n')
+}
+
 export function openSettings(voice) {
   const { el, close } = layer('settings')
   let tab = 'account'
@@ -108,7 +153,7 @@ export function openSettings(voice) {
 
   const nav = h('nav')
   const content = h('div.st-content')
-  const tabs = [['account', 'Mi cuenta'], ['voice', 'Voz'], ['about', 'Acerca de']]
+  const tabs = [['account', 'Mi cuenta'], ['voice', 'Voz'], ['diag', 'Diagnóstico'], ['about', 'Acerca de']]
 
   function render() {
     meterStop?.(); meterStop = null
@@ -116,7 +161,7 @@ export function openSettings(voice) {
       h('div.st-title', 'Ajustes de usuario'),
       ...tabs.map(([id, label]) => h('button.st-item' + (id === tab ? '.active' : ''), { onclick: () => { tab = id; render() } }, label))
     )
-    content.replaceChildren(({ account, voice: voiceTab, about })[tab]())
+    content.replaceChildren(({ account, voice: voiceTab, diag, about })[tab]())
   }
 
   function account() {
@@ -188,6 +233,25 @@ export function openSettings(voice) {
       h('div.field', h('div.label', 'Prueba de micrófono'), h('div.meter', bar)),
       h('p.muted', 'La cancelación de eco, la supresión de ruido y el control automático de ganancia están activados.')
     )
+  }
+
+  function diag() {
+    const box = h('pre.diag', 'Recopilando…')
+    const copy = h('button.btn.brand', {
+      onclick: () => navigator.clipboard.writeText(box.textContent).then(() => toast('Informe copiado', 'ok'), () => toast('No se pudo copiar', 'warn'))
+    }, 'Copiar informe')
+    let timer = null
+    const refresh = async () => {
+      if (!box.isConnected) return clearInterval(timer)
+      try { box.textContent = await buildReport(voice) } catch (e) { box.textContent = 'No se pudo generar el informe: ' + e.message }
+    }
+    timer = setInterval(refresh, 2000)
+    const prevStop = meterStop
+    meterStop = () => { clearInterval(timer); prevStop?.() }
+    setTimeout(refresh, 50) // tras insertar el panel en el DOM
+    return h('div', h('h2', 'Diagnóstico'),
+      h('p.muted', 'Estado de la red y de las llamadas, útil para saber por qué algo no va bien. No incluye IPs ni mensajes.'),
+      box, h('div.row', copy))
   }
 
   function about() {

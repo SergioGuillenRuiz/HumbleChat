@@ -5,7 +5,8 @@ const fs = require('fs')
 const crypto = require('crypto')
 const { ChatNode } = require('../core/node')
 const { findGroupKey } = require('../core/groupkey')
-const { CHANNELS, SERVER_NAME, LIMITS, ICE_SERVERS } = require('../core/constants')
+const { loadNetwork } = require('../core/network')
+const { CHANNELS, SERVER_NAME, LIMITS } = require('../core/constants')
 
 const ROOT = path.join(__dirname, '..', '..')
 const RENDERER = path.join(__dirname, '..', 'renderer')
@@ -29,6 +30,8 @@ if (process.env.HUMBLECHAT_FAKE_MEDIA) {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 }
+if (process.env.HUMBLECHAT_FAKE_UI) app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+if (process.env.HUMBLECHAT_FAKE_AUDIO_FILE) app.commandLine.appendSwitch('use-file-for-fake-audio-capture', process.env.HUMBLECHAT_FAKE_AUDIO_FILE)
 if (process.env.HUMBLECHAT_NO_SANDBOX) app.commandLine.appendSwitch('no-sandbox') // contenedores como root
 
 protocol.registerSchemesAsPrivileged([
@@ -50,7 +53,8 @@ let quitting = false
 let pendingScreenId = null
 
 // getSources a veces devuelve una lista vacía de forma transitoria (equipos lentos, primer fotograma tardío).
-async function getSources(opts, tries = 3) {
+// En Wayland cada llamada abre el diálogo del portal del sistema: nunca se reintenta (si cancelas, cancelas).
+async function getSources(opts, tries = IS_WAYLAND ? 1 : 5) {
   for (let i = 0; i < tries; i++) {
     const sources = await desktopCapturer.getSources(opts)
     if (sources.length) return sources
@@ -84,14 +88,21 @@ function loadKey() {
   app.exit(1)
 }
 
+let network = null
+
 async function startNode() {
-  let dht
+  network = loadNetwork({
+    userDataDir: app.getPath('userData'),
+    resourcesDir: app.isPackaged ? process.resourcesPath : null,
+    repoRoot: app.isPackaged ? null : ROOT
+  })
+  let { bootstrap } = network
+  let dhtOpts = {}
   if (process.env.HUMBLECHAT_BOOTSTRAP) { // solo pruebas: DHT local en vez de la pública
-    const DHT = require('hyperdht')
-    const [host, port] = process.env.HUMBLECHAT_BOOTSTRAP.split(':')
-    dht = new DHT({ bootstrap: [{ host, port: Number(port) }], host: '127.0.0.1' })
+    bootstrap = [process.env.HUMBLECHAT_BOOTSTRAP]
+    dhtOpts = { host: '127.0.0.1' }
   }
-  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: loadKey(), dht })
+  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: loadKey(), bootstrap, dhtOpts })
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
   let batch = []
   node.on('event', (ev) => {
@@ -109,8 +120,8 @@ function isOurs(url) { return typeof url === 'string' && url.startsWith('humble:
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: Number(process.env.HUMBLECHAT_W) || 1280,
+    height: Number(process.env.HUMBLECHAT_H) || 800,
     minWidth: 940,
     minHeight: 560,
     show: false,
@@ -188,11 +199,16 @@ function setupSession() {
   ses.setPermissionCheckHandler((_wc, permission, origin) => allowed.has(permission) && String(origin).startsWith('humble://app'))
   ses.setDisplayMediaRequestHandler(async (_req, callback) => {
     try {
+      // X11/Windows: el selector ya nos dio el id; no hace falta volver a listar (es lo lento y lo intermitente).
+      if (pendingScreenId) {
+        const id = pendingScreenId
+        pendingScreenId = null
+        return callback({ video: { id, name: id } }) // sin audio del sistema: capturaría las voces de los demás
+      }
+      // Wayland: el portal del sistema pregunta aquí qué compartir.
       const sources = await getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
-      const chosen = sources.find((s) => s.id === pendingScreenId) || sources[0]
-      pendingScreenId = null
-      if (!chosen) return callback(null)
-      callback({ video: chosen }) // sin audio del sistema: capturaría las voces de los demás
+      if (!sources.length) return callback(null)
+      callback({ video: sources[0] })
     } catch {
       callback(null)
     }
@@ -214,7 +230,7 @@ function setupIpc() {
       server: SERVER_NAME,
       channels: CHANNELS,
       limits: { blob: LIMITS.blob, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name },
-      iceServers: ICE_SERVERS,
+      iceServers: network.iceServers,
       platform: process.platform,
       pickerNeeded: !IS_WAYLAND // en Wayland ya pregunta el portal del sistema
     }
@@ -249,6 +265,14 @@ function setupIpc() {
     n.show()
     win.flashFrame(true)
   })
+  handle('diag', () => ({
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    network: network.source === 'por defecto' ? 'públicos (DHT Hyperswarm + STUN)' : 'propios (' + path.basename(network.source) + ')',
+    ...node.diagnostics()
+  }))
   handle('openExternal', (_e, url) => openExternal(url))
 }
 
