@@ -59,6 +59,10 @@ module.exports = {
   },
   "nsis": {
     "oneClick": true,
+    "createDesktopShortcut": "always",
+    "createStartMenuShortcut": true,
+    "shortcutName": "HumbleChat",
+    "uninstallDisplayName": "HumbleChat",
     "perMachine": false,
     "runAfterFinish": true,
     "deleteAppDataOnUninstall": false,

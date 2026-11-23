@@ -1,0 +1,50 @@
+# Maintainer: HumbleChat
+# Compila la última versión desde el repositorio (sin la llave de sala: la aplicación pide el código al abrirse).
+#   cd packaging/aur && makepkg -si
+pkgname=humblechat-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Chat de texto, voz y vídeo para grupos pequeños de amigos, sin servidor ni cuentas (P2P)'
+arch=('x86_64')
+url='https://github.com/SergioGuillenRuiz/HumbleChat'
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libnotify' 'libxtst' 'libxkbcommon-x11' 'xdg-utils')
+makedepends=('git' 'nodejs' 'npm')
+optdepends=('xdg-desktop-portal: compartir pantalla en Wayland' 'pipewire: audio y captura de pantalla en Wayland')
+provides=('humblechat')
+conflicts=('humblechat')
+options=('!strip' '!debug')
+source=("$pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf '%s.r%s.%s' "$(node -p "require('./package.json').version")" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  npm ci
+  HUMBLECHAT_PUBLIC=1 npx electron-builder --config electron-builder.config.js --linux dir --x64 --publish never
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -d "$pkgdir/opt/humblechat" "$pkgdir/usr/bin"
+  cp -a dist/linux-unpacked/. "$pkgdir/opt/humblechat/"
+  chmod 4755 "$pkgdir/opt/humblechat/chrome-sandbox" # sandbox SUID de Electron
+  ln -s /opt/humblechat/humblechat "$pkgdir/usr/bin/humblechat"
+  install -Dm644 build/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/humblechat.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/humblechat.desktop" <<DESKTOP
+[Desktop Entry]
+Name=HumbleChat
+Comment=Chat de texto, voz y vídeo para tu grupo de amigos
+Exec=/usr/bin/humblechat %U
+Icon=humblechat
+Terminal=false
+Type=Application
+Categories=Network;Chat;AudioVideo;
+StartupWMClass=humblechat
+DESKTOP
+}
