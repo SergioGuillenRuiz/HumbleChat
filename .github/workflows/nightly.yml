@@ -84,20 +84,10 @@ jobs:
           retention-days: 14
 
   # ── Internet de verdad: dos máquinas en redes distintas, DHT y STUN públicos ──
-  llave:
-    runs-on: ubuntu-latest
-    outputs:
-      llave: ${{ steps.k.outputs.llave }}
-    steps:
-      - id: k
-        run: |
-          k=$(openssl rand -hex 32)
-          echo "::add-mask::$k"
-          echo "llave=$k" >> "$GITHUB_OUTPUT"
-
+  # Las dos derivan la misma llave de sala del número de ejecución (una sala desechable, no un secreto). No puede
+  # pasarse como salida de otro trabajo: GitHub descarta las salidas enmascaradas.
   dht-publica:
     name: DHT pública · ${{ matrix.papel }} en ${{ matrix.os }}
-    needs: llave
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -121,10 +111,11 @@ jobs:
         # código 3 = chat correcto pero la voz no se estableció: se anota en el resumen sin dar el trabajo por roto
         run: |
           set +e
+          llave=$(printf 'humblechat-nocturno-%s-%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | cut -d' ' -f1)
           if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run -a -s "-screen 0 1920x1080x24" node test/publicnet.js "${{ matrix.papel }}" "${{ needs.llave.outputs.llave }}"
+            xvfb-run -a -s "-screen 0 1920x1080x24" node test/publicnet.js "${{ matrix.papel }}" "$llave"
           else
-            node test/publicnet.js "${{ matrix.papel }}" "${{ needs.llave.outputs.llave }}"
+            node test/publicnet.js "${{ matrix.papel }}" "$llave"
           fi
           code=$?
           if [ "$code" = "3" ]; then echo "::warning::La voz por Internet no se estableció (ver el resumen)"; exit 0; fi
