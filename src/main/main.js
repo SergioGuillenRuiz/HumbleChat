@@ -8,6 +8,7 @@ const { findGroupKey, generateKey, formatCode, parseCode, fingerprint } = requir
 const { checkNat, EXPLAIN } = require('../core/natcheck')
 const { createSettings } = require('./settings')
 const { startUpdates } = require('./updates')
+const { UdpTunnels } = require('./udptunnel')
 const { trayHostAvailable, createTray } = require('./tray')
 const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
@@ -54,6 +55,7 @@ process.on('unhandledRejection', (e) => console.error('[humblechat] unhandledRej
 
 let win = null
 let node = null
+let tunnels = null
 let rendererReady = false
 let quitting = false
 let pendingScreenId = null
@@ -138,6 +140,7 @@ async function startNode(key) {
     dhtOpts = { host: process.env.HUMBLECHAT_DHT_HOST || '127.0.0.1' } // DHT_HOST: pruebas con espacios de red (NAT simulado)
   }
   node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts })
+  tunnels = new UdpTunnels(node)
   if (process.env.HUMBLECHAT_NET_DEBUG) globalThis.__hcNode = node // solo diagnóstico de pruebas (test/lib.js lo lee con app.evaluate)
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
   let batch = []
@@ -375,6 +378,10 @@ function setupIpc() {
   handle('setName', (_e, name) => node.setName(name))
   handle('setVoice', (_e, v) => node.setVoice(v))
   handle('signal', (_e, to, data) => node.signal(to, data))
+  // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
+  handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null))
+  handle('tunnel:close', (_e, id) => { if (typeof id === 'string') tunnels?.close(id) })
+  handle('tunnel:stats', (_e, id) => (typeof id === 'string' ? tunnels?.stats(id) ?? null : null))
   handle('addBlob', (_e, { data, name, mime, w, ht }) => {
     if (typeof mime !== 'string' || !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i.test(mime) || mime.length > 80) mime = 'application/octet-stream'
     return node.addBlob(Buffer.from(data), { name, mime, w, ht })
@@ -443,6 +450,7 @@ function setupIpc() {
 async function switchRoom(key) {
   if (process.env.HUMBLECHAT_KEY) throw new Error('La llave está fijada por la variable HUMBLECHAT_KEY.')
   saveKey(key)
+  tunnels?.closeAll(); tunnels = null
   if (node) { await node.stop().catch(() => {}); node = null }
   rendererReady = false
   await startNode(key)
@@ -517,7 +525,7 @@ app.whenReady().then(async () => {
     send,
     settings,
     onForced: () => { gateMode = true },
-    stopNetwork: async () => { const n = node; node = null; await n?.stop().catch(() => {}) }
+    stopNetwork: async () => { const n = node; node = null; tunnels?.closeAll(); tunnels = null; await n?.stop().catch(() => {}) }
   })
   // Antes de tocar la red: si esta versión ya no es la última, no se arranca nada más (ni nodo, ni bandeja, ni teclas).
   const gate = await updates.gateAtStartup()

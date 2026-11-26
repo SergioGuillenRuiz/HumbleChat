@@ -29,6 +29,7 @@ const TURN = { urls: `turn:${HOST_IP}:3478?transport=udp`, username: 'hc', crede
 const DIRECT = 'directa (atravesando NAT)'
 const isDirect = (p) => p === DIRECT || p === 'red local'
 const isTurn = (p) => p === 'por relé TURN'
+const isTunnel = (p) => p === 'por túnel de la red P2P'
 const isFriendRelay = (p) => /^retransmitido por /.test(p)
 
 /** Escenarios: clientes (en orden Ana, Beto, Carla…) y qué camino debe tomar el audio entre cada par. */
@@ -39,13 +40,12 @@ const SCENARIOS = [
     paths: [isDirect], desc: 'dos hogares con NAT de cono: conexión directa'
   },
   {
-    // Limitación conocida (README): la voz WebRTC no atraviesa un NAT simétrico frente a un cono estricto sin TURN
-    // ni un tercer amigo. El chat sí conecta (la DHT perfora con puertos aleatorios). Si algún día la voz funciona,
-    // la prueba lo anuncia como mejora en lugar de fallar.
+    // Antes era una limitación conocida: WebRTC no atraviesa un NAT simétrico frente a un cono estricto sin TURN. Ahora,
+    // si la conexión directa no se logra, el audio pasa por el túnel que va dentro de la conexión P2P del chat
+    // (src/main/udptunnel.js), que la DHT sí consigue perforar.
     name: 'simetrico-cono',
     clients: [{ nat: 'symmetric', netem: LAN }, { nat: 'cone', netem: LAN }],
-    paths: [isDirect, isTurn, isFriendRelay], voiceLimit: true,
-    desc: 'un lado simétrico y el otro cono, sin TURN: chat sí; voz, limitación conocida'
+    paths: [isDirect, isTunnel], desc: 'un lado simétrico y el otro cono, sin TURN: la voz va directa o por el túnel de la red P2P'
   },
   {
     name: 'simetrico-cono-turn',
@@ -69,9 +69,10 @@ const SCENARIOS = [
     desc: 'dos NAT simétricos con un servidor TURN configurado: el audio entre ellos pasa por el TURN'
   },
   {
+    // Es el caso de un portátil con datos móviles frente a una casa con fibra: antes sin voz, ahora por el túnel.
     name: 'cgnat-cono',
     clients: [{ nat: 'cgnat', netem: LAN }, { nat: 'cone', netem: LAN }],
-    paths: [isDirect, isFriendRelay, isTurn], voiceLimit: true, desc: 'doble NAT (CGNAT) frente a un cono'
+    paths: [isDirect, isTunnel], desc: 'doble NAT (CGNAT, como datos móviles) frente a un cono: la voz va directa o por el túnel'
   }
 ]
 

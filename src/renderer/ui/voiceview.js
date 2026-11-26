@@ -16,10 +16,22 @@ export function mountVoiceView(el) {
   bus.on('speaking', applySpeaking)
 }
 
+/** Un <video> sin controles nativos que se muestra solo cuando ya hay fotogramas (antes se vería negro). */
+function liveVideo(cls, onChange) {
+  const v = h('video' + cls, { autoplay: true, playsinline: true, muted: true, controls: false, disablePictureInPicture: true })
+  v.removeAttribute('controls')
+  v.controlsList = 'nodownload nofullscreen noremoteplayback'
+  const set = (live) => { if (v.dataset.live !== (live ? '1' : '')) { v.dataset.live = live ? '1' : ''; onChange?.(live) } }
+  for (const ev of ['playing', 'loadeddata', 'resize']) v.addEventListener(ev, () => set(v.videoWidth > 0))
+  v.addEventListener('emptied', () => set(false))
+  v.live = set
+  return v
+}
+
 function camVideo(id, stream) {
   let v = camEls.get(id)
-  if (!v) { v = h('video.cam', { autoplay: true, playsinline: true, muted: true }); camEls.set(id, v) }
-  if (v.srcObject !== stream) v.srcObject = stream
+  if (!v) { v = liveVideo('.cam', (live) => v.classList.toggle('wait', !live)); v.classList.add('wait'); camEls.set(id, v) }
+  if (v.srcObject !== stream) { v.live(false); v.srcObject = stream }
   v.classList.toggle('mirror', id === state.me.id)
   return v
 }
@@ -51,12 +63,17 @@ export function render() {
 
   let stage
   if (watched) {
-    if (!video) video = h('video', { autoplay: true, playsinline: true, muted: true })
+    if (!video) video = liveVideo('', (live) => { const w = root?.querySelector('.theater-wait'); if (w) w.classList.toggle('hidden', live) })
     const stream = state.streams.get(watched)
-    if (video.srcObject !== stream) video.srcObject = stream
+    if (video.srcObject !== stream) { video.live(false); video.srcObject = stream }
     const who = state.byId.get(watched)
+    const mine = watched === state.me.id
+    // Mientras no llega ningún fotograma se explica qué pasa, en vez de dejar un recuadro negro
+    const hint = h('p', mine ? 'Preparando tu pantalla…' : 'Conectando con la pantalla compartida…')
+    const wait = h('div.theater-wait' + (video.dataset.live === '1' ? '.hidden' : ''), h('div.spinner'), h('b', mine ? 'Tu pantalla' : `Pantalla de ${who?.name || ''}`), hint)
+    if (!mine) setTimeout(() => { if (video.dataset.live !== '1') hint.textContent = 'Está tardando más de lo normal: se está probando otro camino de conexión. Si no aparece, pídele que deje de compartir y vuelva a empezar.' }, 12000)
     stage = h('div.stage.theater',
-      h('div.theater-video', video,
+      h('div.theater-video', video, wait,
         h('div.theater-bar',
           h('span', watched === state.me.id ? 'Tu pantalla' : `Pantalla de ${who?.name || ''}`),
           h('button.lb-btn', { onclick: () => video.requestFullscreen?.() }, 'Pantalla completa'),

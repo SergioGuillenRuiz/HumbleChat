@@ -16,7 +16,7 @@ const fs = require('fs')
 const Hyperswarm = require('hyperswarm')
 const DHT = require('hyperdht')
 const { LIMITS, PROTOCOL } = require('./constants')
-const { encodeJSON, encodeBlob, Decoder } = require('./frames')
+const { encodeJSON, encodeBlob, encodeDatagram, Decoder } = require('./frames')
 const { loadIdentity } = require('./identity')
 const { Store, cleanEvent, cleanChannelName, CHAN_ID } = require('./store')
 const dmcrypto = require('./dmcrypto')
@@ -57,7 +57,8 @@ class Peer {
     this.decoder = new Decoder(
       (msg) => node._onMessage(this, msg),
       (h, off, total, data) => node._onBlobFrame(this, h, off, total, data),
-      () => this.close()
+      () => this.close(),
+      (data) => node.emit('datagram', this.id, data)
     )
     conn.on('data', (d) => this.decoder.push(d))
     conn.on('error', () => {})
@@ -68,6 +69,14 @@ class Peer {
   send(obj) {
     if (this.closed || this.conn.destroyed) return
     this.conn.write(encodeJSON(obj))
+  }
+
+  /** Datagrama del túnel: como UDP, si el enlace va saturado se descarta en vez de acumularse. */
+  sendDatagram(data) {
+    if (this.closed || this.conn.destroyed || data.length > 16 * 1024) return false
+    if ((this.conn.writableLength || 0) > 512 * 1024) return false
+    this.conn.write(encodeDatagram(data))
+    return true
   }
 
   write(buf) {
@@ -424,6 +433,11 @@ class ChatNode extends EventEmitter {
     const p = this.peers.get(to)
     if (p) p.send({ t: 'sig', data })
     return p ? true : this.relay.sendSignal(to, data) // sin conexión directa: por el amigo que nos une
+  }
+
+  /** Envía un datagrama del túnel UDP a un amigo con conexión directa. */
+  sendDatagram(to, data) {
+    return !!this.peers.get(to)?.sendDatagram(data)
   }
 
   addBlob(buf, meta) {

@@ -37,7 +37,7 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 ## Diagnóstico de fallos de CI
 - Si una prueba falla en CI, se suben como artefacto `test-results/` (registros de cada paso, capturas de cada ventana y el informe de Diagnóstico de cada instancia) y `test/shots/`. Léelos antes de adivinar la causa.
 - El flujo **Nocturno** (`nightly.yml`) repite las pruebas decenas de veces, ejecuta la red simulada 3 veces y prueba la DHT pública entre un runner Linux y uno Windows. Su resumen da la tasa de fallos de cada prueba.
-- Limitaciones conocidas que `test:netsim` documenta (si se arreglan, la prueba lo anuncia): la voz no atraviesa NAT simétrico↔cono ni CGNAT sin TURN ni un tercer amigo con enlace directo a ambos. Con dos NAT simétricos sí hay llamada: la presencia de voz y las señales viajan retransmitidas y firmadas por el amigo que los une (`src/core/relay.js`, mensajes `rpr` y `rsg`, aditivos: los nodos antiguos los ignoran y no hizo falta subir `PROTOCOL`); el audio va por ese amigo (si tiene enlace directo a ambos) o por TURN.
+- Caminos de la voz/vídeo/pantalla (WebRTC): directo (ICE) → si en 4 s no conecta, **túnel UDP por la conexión P2P del chat** (`src/main/udptunnel.js`, trama `kind 2` en `src/core/frames.js`; a WebRTC se le da un candidato `127.0.0.1:puerto` y el socket reenvía por la conexión de la DHT, que sí atraviesa NAT simétrico y CGNAT) → relé de audio por un tercer amigo → TURN si está configurado. `test:netsim` exige voz en simétrico↔cono, CGNAT↔cono y simétrico↔simétrico. Con dos NAT simétricos la presencia de voz y las señales viajan retransmitidas y firmadas por el amigo que los une (`src/core/relay.js`, mensajes `rpr` y `rsg`, aditivos); el túnel solo existe con amigos de conexión directa. Depuración: `hc.dbg` en localStorage admite `tunnelOnly:[idAmigo]` (sin candidatos reales, solo túnel).
 
 ## Versión obligatoria (OJO al publicar)
 - La aplicación solo funciona si es la última versión publicada en GitHub (`releases/latest`): al arrancar consulta antes de levantar la red; abierta, cada 30 min (plazo de 30 s y después bloqueo). Instalador de Windows y AppImage se actualizan solos; portable y `.pacman` muestran el enlace de descarga. Sin conexión no se bloquea, salvo que ya se hubiera visto una versión más nueva. Código en `src/main/versiongate.js`, `updatecontroller.js` y `updates.js`.
@@ -46,6 +46,7 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 - Solo para pruebas: `HUMBLECHAT_NO_UPDATE_GATE=1` lo desactiva (`test/lib.js` lo pone siempre), `HUMBLECHAT_UPDATE_URL` apunta a otro servidor de «última versión», `HUMBLECHAT_UPDATE_AUTO=1` permite la instalación automática con él, y `HUMBLECHAT_UPDATE_GRACE_MS` / `HUMBLECHAT_UPDATE_INTERVAL_MS` ajustan los tiempos.
 
 ## Releases (sin pasos manuales)
+El flujo de release deja solo las **2 últimas publicaciones** (job `podar` de `release.yml`: borra las demás y sus etiquetas).
 Disparar el flujo **Nueva versión** (`.github/workflows/version.yml`, `workflow_dispatch`, input `bump`: patch|minor|major) sobre `main` con `mcp__github__actions_run_trigger`. Verifica, sube versión, etiqueta y lanza `release.yml`. Solo cuando la persona lo pida. Dependabot abre PRs semanales de dependencias.
 
 ## PC real de la persona (Remote Desktop Commander, CachyOS, Wayland, PipeWire)
