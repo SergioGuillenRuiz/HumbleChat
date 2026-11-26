@@ -29,7 +29,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Verificar antes de publicar
-        run: sudo apt-get update && sudo apt-get install -y xvfb && npm run verify:quick
+        run: (sudo apt-get update || true) && sudo apt-get install -y xvfb && npm run verify:quick
       - name: Calcular la versión nueva
         id: v
         run: |

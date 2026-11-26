@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
       - name: Dependencias (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+        run: (sudo apt-get update || true) && sudo apt-get install -y libarchive-tools
       - name: Compilar y publicar (Windows)
         if: runner.os == 'Windows'
         env:

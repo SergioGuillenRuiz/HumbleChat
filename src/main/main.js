@@ -138,6 +138,7 @@ async function startNode(key) {
     dhtOpts = { host: process.env.HUMBLECHAT_DHT_HOST || '127.0.0.1' } // DHT_HOST: pruebas con espacios de red (NAT simulado)
   }
   node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts })
+  if (process.env.HUMBLECHAT_NET_DEBUG) globalThis.__hcNode = node // solo diagnóstico de pruebas (test/lib.js lo lee con app.evaluate)
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
   let batch = []
   node.on('event', (ev) => {

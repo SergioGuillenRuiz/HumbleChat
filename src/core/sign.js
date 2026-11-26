@@ -35,4 +35,19 @@ function verify(ev) {
   } catch { return false }
 }
 
-module.exports = { sign, verify, canon, HEX128 }
+/** Firma de mensajes sueltos (presencia y señales retransmitidas). `domain` separa usos: una firma de un tipo no vale para otro. */
+function signParts(secretKey, domain, parts) {
+  const sig = Buffer.alloc(sodium.crypto_sign_BYTES)
+  sodium.crypto_sign_detached(sig, Buffer.from(JSON.stringify([domain, ...parts])), secretKey)
+  return sig.toString('hex')
+}
+
+/** `author` es la clave pública (hex de 64) de quien firmó. Nunca lanza. */
+function verifyParts(author, domain, parts, sigHex) {
+  if (typeof sigHex !== 'string' || !HEX128.test(sigHex) || typeof author !== 'string' || !/^[0-9a-f]{64}$/.test(author)) return false
+  try {
+    return sodium.crypto_sign_verify_detached(Buffer.from(sigHex, 'hex'), Buffer.from(JSON.stringify([domain, ...parts])), Buffer.from(author, 'hex'))
+  } catch { return false }
+}
+
+module.exports = { sign, verify, canon, signParts, verifyParts, HEX128 }

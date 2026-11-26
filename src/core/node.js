@@ -23,6 +23,7 @@ const dmcrypto = require('./dmcrypto')
 const { Blobs } = require('./blobs')
 const { topicOf, proofOf } = require('./groupkey')
 const { sign } = require('./sign')
+const { Relay } = require('./relay')
 
 const HEX64 = /^[0-9a-f]{64}$/
 
@@ -95,8 +96,9 @@ class ChatNode extends EventEmitter {
    * @param {string[]} [o.bootstrap] nodos de arranque propios ("host:puerto"); por defecto los públicos
    * @param {object} [o.dht]      DHT ya creada (tests con red local)
    * @param {object} [o.dhtOpts]  opciones extra para la DHT (solo tests: host 127.0.0.1)
+   * @param {object} [o.relay]    tiempos del relé de presencia y señales (solo tests)
    */
-  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {} }) {
+  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {} }) {
     super()
     this.dir = dir
     this.groupKey = groupKey
@@ -111,6 +113,23 @@ class ChatNode extends EventEmitter {
     this.state = 'connecting'
     this.membersDirty = false
     this.stopped = false
+    this.relay = new Relay(this, relay)
+  }
+
+  /** Estado interno de la red P2P, solo para diagnosticar fallos en pruebas (se expone con HUMBLECHAT_NET_DEBUG). */
+  debugInfo() {
+    const safe = (fn) => { try { return fn() } catch { return null } }
+    const dht = this.swarm?.dht
+    return {
+      dht: dht ? { host: dht.host, port: dht.port, firewalled: dht.firewalled, randomized: dht.randomized, nodes: safe(() => dht.nodes.length), bootstrapped: dht.bootstrapped } : null,
+      swarm: {
+        connections: safe(() => this.swarm.connections.size),
+        connecting: this.swarm?.connecting,
+        peers: safe(() => [...this.swarm.peers.values()].map((p) => ({ k: p.publicKey.toString('hex').slice(0, 8), attempts: p.attempts, banned: p.banned, proven: p.proven, priority: p.priority, waiting: p.waiting, explicit: p.explicit })))
+      },
+      friends: [...this.peers.keys()].map((k) => k.slice(0, 8)),
+      indirect: [...this.relay.reachable().keys()].map((k) => k.slice(0, 8))
+    }
   }
 
   get id() { return this.identity.id }
@@ -138,6 +157,7 @@ class ChatNode extends EventEmitter {
     this.swarm.dht.on('network-update', () => this._refreshState())
 
     this.discovery = this.swarm.join(topicOf(this.groupKey), { server: true, client: true })
+    this.relay.start()
     this.connectTimer = setTimeout(() => { if (!this.ready) this._setState('offline') }, 15000)
     this.pumpTimer = setInterval(() => this._pumpBlobs(), 20000)
     this.pumpTimer.unref?.()
@@ -157,6 +177,7 @@ class ChatNode extends EventEmitter {
     clearTimeout(this.connectTimer)
     clearInterval(this.pumpTimer)
     clearInterval(this.nodesTimer)
+    this.relay.stop()
     this._saveNodes()
     for (const p of [...this.all]) { p.send({ t: 'bye' }); }
     await new Promise((r) => setTimeout(r, 50))
@@ -205,17 +226,20 @@ class ChatNode extends EventEmitter {
   _members() {
     const ids = new Set(this.store.members().keys())
     for (const id of this.peers.keys()) ids.add(id)
+    for (const id of this.relay.reachable().keys()) ids.add(id)
     ids.add(this.id)
     const out = []
     for (const id of ids) {
       const peer = this.peers.get(id)
+      const via = peer ? null : this.relay.reachable().get(id) // alcanzable solo a través de otro amigo (p. ej. dos NAT simétricos)
       const me = id === this.id
       out.push({
         id,
         name: (me ? this.name : this.store.names.get(id)?.name || peer?.name) || 'Amigo ' + id.slice(0, 4),
         av: this.store.names.get(id)?.av || null,
-        online: me || !!peer,
-        voice: me ? this.voice : peer ? peer.voice : null
+        online: me || !!peer || !!via,
+        ...(via ? { indirect: true } : {}),
+        voice: me ? this.voice : peer ? peer.voice : via ? via.voice : null
       })
     }
     return out
@@ -392,13 +416,14 @@ class ChatNode extends EventEmitter {
   setVoice(v) {
     this.voice = cleanVoice(v)
     this._broadcast({ t: 'pres', voice: this.voice })
+    this.relay.announce()
     this._emitMembers()
   }
 
   signal(to, data) {
     const p = this.peers.get(to)
     if (p) p.send({ t: 'sig', data })
-    return !!p
+    return p ? true : this.relay.sendSignal(to, data) // sin conexión directa: por el amigo que nos une
   }
 
   addBlob(buf, meta) {
@@ -454,6 +479,7 @@ class ChatNode extends EventEmitter {
     for (const set of this.waiters.values()) set.delete(peer)
     if (this.peers.get(peer.id) === peer) {
       this.peers.delete(peer.id)
+      this.relay.peerLeft(peer.id)
       this._emitMembers()
       this.emit('status', this.status())
       this.emit('peer-left', peer.id)
@@ -479,6 +505,8 @@ class ChatNode extends EventEmitter {
       this.peers.set(peer.id, peer)
       if (old && old !== peer) old.close()
       peer.send({ t: 'sync', vec: this.store.vector() })
+      this.relay.peerJoined(peer.id)
+      this.relay.greet(peer)
       this._emitMembers()
       this.emit('status', this.status())
       return
@@ -497,6 +525,8 @@ class ChatNode extends EventEmitter {
       case 'typ':
         if (typeof m.ch === 'string' && CHAN_ID.test(m.ch)) this.emit('typing', peer.id, m.ch)
         return
+      case 'rpr': return this.relay.onPresence(peer, m)
+      case 'rsg': return this.relay.onSignal(peer, m)
       case 'bw': return this._onBlobWant(peer, m.h)
       case 'bmiss':
         if (typeof m.h === 'string') { peer.misses.set(m.h, Date.now()); if (this.wanted.get(m.h)?.peerId === peer.id) this.wanted.delete(m.h) }
