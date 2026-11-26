@@ -116,6 +116,22 @@ class ChatNode extends EventEmitter {
     this.relay = new Relay(this, relay)
   }
 
+  /** Estado interno de la red P2P, solo para diagnosticar fallos en pruebas (se expone con HUMBLECHAT_NET_DEBUG). */
+  debugInfo() {
+    const safe = (fn) => { try { return fn() } catch { return null } }
+    const dht = this.swarm?.dht
+    return {
+      dht: dht ? { host: dht.host, port: dht.port, firewalled: dht.firewalled, randomized: dht.randomized, nodes: safe(() => dht.nodes.length), bootstrapped: dht.bootstrapped } : null,
+      swarm: {
+        connections: safe(() => this.swarm.connections.size),
+        connecting: this.swarm?.connecting,
+        peers: safe(() => [...this.swarm.peers.values()].map((p) => ({ k: p.publicKey.toString('hex').slice(0, 8), attempts: p.attempts, banned: p.banned, proven: p.proven, priority: p.priority, waiting: p.waiting, explicit: p.explicit })))
+      },
+      friends: [...this.peers.keys()].map((k) => k.slice(0, 8)),
+      indirect: [...this.relay.reachable().keys()].map((k) => k.slice(0, 8))
+    }
+  }
+
   get id() { return this.identity.id }
   get name() { return this.store.names.get(this.id)?.name || this.identity.name }
 

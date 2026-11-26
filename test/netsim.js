@@ -147,8 +147,10 @@ async function runScenario(sc) {
         console.log(`   ✘ ${problems.length} problema(s) (${Math.round((Date.now() - t0) / 1000)} s):`)
         for (const p of problems) console.log('     - ' + p)
         for (const f of fs.readdirSync(dir).filter((x) => x.startsWith('log-'))) console.log(`   --- ${f} (final) ---\n` + fs.readFileSync(path.join(dir, f), 'utf8').split('\n').slice(-15).join('\n'))
-        const keep = process.env.NETSIM_ARTIFACTS
-        if (keep) { fs.mkdirSync(keep, { recursive: true }); for (const f of fs.readdirSync(dir)) fs.copyFileSync(path.join(dir, f), path.join(keep, `${sc.name}-${f}`)) }
+        // Siempre se guardan (sudo no pasa bien las variables de entorno): el CI sube test-results/ al fallar
+        const keep = process.env.NETSIM_ARTIFACTS || path.join(__dirname, '..', 'test-results', 'netsim')
+        fs.mkdirSync(keep, { recursive: true })
+        for (const f of fs.readdirSync(dir)) fs.copyFileSync(path.join(dir, f), path.join(keep, `${sc.name}-${f}`))
       } else console.log(`   ✔ correcto (${Math.round((Date.now() - t0) / 1000)} s)`)
     }
   } finally {
