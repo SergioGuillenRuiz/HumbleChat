@@ -26,6 +26,48 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: "Verificación completa (la misma que usa Claude, npm run verify)"
         run: npm run verify
+      - name: Subir registros y capturas del fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fallo-pruebas-${{ matrix.os }}
+          path: |
+            test-results/
+            test/shots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  red-simulada:
+    name: Red simulada (NAT, latencia, TURN)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Dependencias del sistema (espacios de red, nftables, tc, coturn)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb iproute2 nftables iputils-ping coturn
+          # el módulo netem (latencia y pérdida) va en el paquete extra del núcleo; si no está, la prueba degrada a solo pérdida
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe sch_netem || true
+          sudo systemctl disable --now coturn || true
+      - name: Escenarios de red (cono, simétrico, CGNAT, TURN)
+        run: npm run test:netsim
+        env:
+          NETSIM_ARTIFACTS: ${{ github.workspace }}/test-results/netsim
+      - name: Subir registros del fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fallo-red-simulada
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   paquete:
     name: Paquete y ejecución (${{ matrix.os }})

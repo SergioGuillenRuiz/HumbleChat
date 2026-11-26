@@ -1,0 +1,139 @@
+name: Nocturno
+
+# Mide la estabilidad de las pruebas (cada una se repite muchas veces) y prueba la aplicación con Internet de verdad:
+# dos runners en redes distintas se encuentran por la DHT pública. Los fallos dejan registros y capturas como artefactos.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      repeticiones:
+        description: 'Repeticiones de la prueba de humo (el resto se escala a partir de ellas)'
+        default: '20'
+
+jobs:
+  estabilidad:
+    name: Estabilidad · ${{ matrix.nombre }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, nombre: humo, veces: 1, cmd: 'node test/smoke.js' }
+          - { os: ubuntu-latest, nombre: e2e, veces: 0.5, cmd: 'node test/e2e.js' }
+          - { os: ubuntu-latest, nombre: e2e2, veces: 0.25, cmd: 'node test/e2e2.js' }
+          - { os: windows-latest, nombre: humo, veces: 1, cmd: 'node test/smoke.js' }
+          - { os: windows-latest, nombre: contenido, veces: 0.5, cmd: 'node test/e2e2.js contenido' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Instalar Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Repetir y contar fallos
+        shell: bash
+        run: |
+          base="${{ inputs.repeticiones || '20' }}"
+          n=$(node -e "console.log(Math.max(1, Math.round($base * ${{ matrix.veces }})))")
+          node scripts/flaky.js "${{ matrix.nombre }}" "$n" -- ${{ matrix.cmd }}
+      - name: Subir registros de las ejecuciones fallidas
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-${{ matrix.nombre }}-${{ matrix.os }}
+          path: |
+            test-results/
+            test/shots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  red-simulada:
+    name: Estabilidad · red simulada (3 repeticiones)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb iproute2 nftables iputils-ping coturn
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe sch_netem || true
+          sudo systemctl disable --now coturn || true
+      - name: Repetir los escenarios
+        run: node scripts/flaky.js red-simulada 3 -- npm run test:netsim
+        env:
+          NETSIM_ARTIFACTS: ${{ github.workspace }}/test-results/netsim
+      - name: Subir registros
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-red-simulada
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ── Internet de verdad: dos máquinas en redes distintas, DHT y STUN públicos ──
+  llave:
+    runs-on: ubuntu-latest
+    outputs:
+      llave: ${{ steps.k.outputs.llave }}
+    steps:
+      - id: k
+        run: |
+          k=$(openssl rand -hex 32)
+          echo "::add-mask::$k"
+          echo "llave=$k" >> "$GITHUB_OUTPUT"
+
+  dht-publica:
+    name: DHT pública · ${{ matrix.papel }} en ${{ matrix.os }}
+    needs: llave
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, papel: ana }
+          - { os: windows-latest, papel: beto }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Instalar Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Encontrarse, chatear y hablar por la DHT pública
+        shell: bash
+        # código 3 = chat correcto pero la voz no se estableció: se anota en el resumen sin dar el trabajo por roto
+        run: |
+          set +e
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a -s "-screen 0 1920x1080x24" node test/publicnet.js "${{ matrix.papel }}" "${{ needs.llave.outputs.llave }}"
+          else
+            node test/publicnet.js "${{ matrix.papel }}" "${{ needs.llave.outputs.llave }}"
+          fi
+          code=$?
+          if [ "$code" = "3" ]; then echo "::warning::La voz por Internet no se estableció (ver el resumen)"; exit 0; fi
+          exit $code
+      - name: Subir capturas del fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fallo-dht-publica-${{ matrix.papel }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14

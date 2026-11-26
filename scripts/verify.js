@@ -4,7 +4,6 @@
 //   npm run verify:quick    núcleo + prueba de humo (~15 s)
 // Sin pantalla en Linux se relanza cada paso con xvfb-run. Sale con código distinto de 0 si algo falla.
 'use strict'
-const { spawnSync } = require('child_process')
 const path = require('path')
 
 const quick = process.argv.includes('--quick')
@@ -27,20 +26,39 @@ if (!quick) {
   }
 }
 
-const results = []
-for (const s of steps) {
-  let [cmd, ...args] = s.cmd
-  if (s.gui && needXvfb) { args = ['-a', '-s', '-screen 0 1920x1080x24', cmd, ...args]; cmd = 'xvfb-run' }
-  const t = Date.now()
-  console.log(`\n=== ${s.name} ===`)
-  const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: win })
-  const ok = r.status === 0
-  results.push({ name: s.name, ok, secs: Math.round((Date.now() - t) / 1000) })
-  if (!ok) break // el primer fallo basta: el resto depende de lo anterior
+// Cada paso se emite en directo y se guarda en test-results/ (el CI lo sube como artefacto si algo falla).
+const fs = require('fs')
+const { spawn } = require('child_process')
+const outDir = path.join(root, 'test-results')
+fs.mkdirSync(outDir, { recursive: true })
+
+function run(cmd, args, file) {
+  return new Promise((resolve) => {
+    const log = fs.createWriteStream(file)
+    const child = spawn(cmd, args, { cwd: root, shell: win })
+    const tee = (chunk, out) => { out.write(chunk); log.write(chunk) }
+    child.stdout.on('data', (c) => tee(c, process.stdout))
+    child.stderr.on('data', (c) => tee(c, process.stderr))
+    child.on('error', (e) => { tee(`No se pudo ejecutar ${cmd}: ${e.message}\n`, process.stderr); log.end(); resolve(1) })
+    child.on('close', (code) => log.end(() => resolve(code)))
+  })
 }
 
-console.log('\n--- Resumen ---')
-for (const r of results) console.log(`${r.ok ? 'OK   ' : 'FALLO'} ${r.name} (${r.secs}s)`)
-const failed = results.some((r) => !r.ok)
-console.log(failed ? 'VERIFY FALLO' : 'VERIFY OK')
-process.exit(failed ? 1 : 0)
+;(async () => {
+  const results = []
+  for (const [i, s] of steps.entries()) {
+    let [cmd, ...args] = s.cmd
+    if (s.gui && needXvfb) { args = ['-a', '-s', '-screen 0 1920x1080x24', cmd, ...args]; cmd = 'xvfb-run' }
+    const t = Date.now()
+    console.log(`\n=== ${s.name} ===`)
+    const code = await run(cmd, args, path.join(outDir, `${i + 1}-${s.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_')}.log`))
+    results.push({ name: s.name, ok: code === 0, secs: Math.round((Date.now() - t) / 1000) })
+    if (code !== 0) break // el primer fallo basta: el resto depende de lo anterior
+  }
+
+  console.log('\n--- Resumen ---')
+  for (const r of results) console.log(`${r.ok ? 'OK   ' : 'FALLO'} ${r.name} (${r.secs}s)`)
+  const failed = results.some((r) => !r.ok)
+  console.log(failed ? 'VERIFY FALLO' : 'VERIFY OK')
+  process.exit(failed ? 1 : 0)
+})()

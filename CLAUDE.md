@@ -16,6 +16,9 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 | `npm run report` | Diagnóstico de un clic (NAT, audio, cámaras). Útil para pegar o ejecutar en el PC real |
 | `npm test` | Pruebas unitarias del núcleo y del contenido (`test/core.test.js`, `test/content.test.js`) |
 | `npm run test:smoke` / `test:e2e` / `test:e2e2` | Pruebas con Electron real (en Linux sin pantalla: `xvfb-run -a -s "-screen 0 1920x1080x24" <cmd>`; `verify` lo hace solo) |
+| `npm run test:netsim [filtro]` | Red simulada (solo Linux con root; `apt install iproute2 nftables coturn xvfb`): cada cliente en su espacio de red tras NAT cono/simétrico/CGNAT, con coturn y DHT propios. En CI es el trabajo «Red simulada» |
+| `node scripts/flaky.js <nombre> <n> -- <cmd>` | Repite una prueba n veces y cuenta fallos (lo usa el nocturno) |
+| `node test/publicnet.js ana\|beto <llave>` | Prueba con la DHT pública entre dos máquinas (la lanza el nocturno, no se usa en local) |
 | `node test/quality.js audio\|video` | Medidas de calidad, no es pasa/no pasa |
 | `npm start` | Ejecuta la app (necesita pantalla) |
 
@@ -28,6 +31,11 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 - `src/main/`: proceso principal Electron (main, preload, tray, updates, ptt, settings).
 - `src/renderer/`: interfaz (voice.js, ui/*, app.js). WebRTC para voz/vídeo.
 - `electron-builder.config.js`, `scripts/build.js`, `.github/workflows/release.yml`: empaquetado y release (etiqueta `v*`).
+
+## Diagnóstico de fallos de CI
+- Si una prueba falla en CI, se suben como artefacto `test-results/` (registros de cada paso, capturas de cada ventana y el informe de Diagnóstico de cada instancia) y `test/shots/`. Léelos antes de adivinar la causa.
+- El flujo **Nocturno** (`nightly.yml`) repite las pruebas decenas de veces, ejecuta la red simulada 3 veces y prueba la DHT pública entre un runner Linux y uno Windows. Su resumen da la tasa de fallos de cada prueba.
+- Limitaciones conocidas que `test:netsim` documenta (si se arreglan, la prueba lo anuncia): la voz no atraviesa NAT simétrico↔cono ni CGNAT sin TURN, y con dos NAT simétricos no hay llamada ni con amigo con IP pública ni con TURN, porque la presencia de voz y la señalización solo viajan por conexiones directas.
 
 ## Releases (sin pasos manuales)
 Disparar el flujo **Nueva versión** (`.github/workflows/version.yml`, `workflow_dispatch`, input `bump`: patch|minor|major) sobre `main` con `mcp__github__actions_run_trigger`. Verifica, sube versión, etiqueta y lanza `release.yml`. Solo cuando la persona lo pida. Dependabot abre PRs semanales de dependencias.
