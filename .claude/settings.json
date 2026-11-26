@@ -26,7 +26,22 @@
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(grep:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run report:*)",
+      "Bash(npx eslint:*)",
+      "mcp__github__actions_get",
+      "mcp__github__actions_list",
+      "mcp__github__get_job_logs",
+      "mcp__github__get_check_run",
+      "mcp__github__pull_request_read",
+      "mcp__github__list_pull_requests",
+      "mcp__github__list_commits",
+      "mcp__github__get_file_contents",
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "mcp__Remote_Desktop_Commander__list_devices",
+      "mcp__Remote_Desktop_Commander__read_process_output",
+      "mcp__Remote_Desktop_Commander__list_directory"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -38,10 +53,26 @@
   },
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-setup.sh\"", "timeout": 600 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-setup.sh\"",
+            "timeout": 600
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-stop-check.sh\"", "timeout": 300 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-stop-check.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
     ]
   }
 }
