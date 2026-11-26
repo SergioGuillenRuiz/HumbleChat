@@ -1,7 +1,7 @@
 {
   "name": "humblechat",
   "productName": "HumbleChat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Chat de texto y voz privado para un grupo pequeño de amigos. Sin servidor, sin cuentas, sin configuración.",
   "main": "src/main/main.js",
   "license": "MIT",
