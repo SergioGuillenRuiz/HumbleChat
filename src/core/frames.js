@@ -1,10 +1,11 @@
 'use strict'
 // Tramas sobre el stream cifrado de Hyperswarm:  [u32 len][u8 kind][payload]
-//   kind 0 = JSON, kind 1 = trozo binario de un adjunto.
+//   kind 0 = JSON, kind 1 = trozo binario de un adjunto, kind 2 = datagrama UDP del túnel de voz/vídeo.
 const { LIMITS } = require('./constants')
 
 const KIND_JSON = 0
 const KIND_BLOB = 1
+const KIND_UDP = 2
 const BLOB_HEADER = 64 + 4 + 4 // hash hex ascii + offset + total
 
 function frame(kind, body) {
@@ -27,8 +28,13 @@ function encodeBlob(hash, offset, total, data) {
   return frame(KIND_BLOB, Buffer.concat([head, data]))
 }
 
+function encodeDatagram(data) {
+  return frame(KIND_UDP, data)
+}
+
 class Decoder {
-  constructor(onJSON, onBlob, onError) {
+  constructor(onJSON, onBlob, onError, onDatagram = null) {
+    this.onDatagram = onDatagram
     this.buf = Buffer.alloc(0)
     this.onJSON = onJSON
     this.onBlob = onBlob
@@ -46,6 +52,7 @@ class Decoder {
       this.buf = this.buf.subarray(4 + len)
       try {
         if (kind === KIND_JSON) this.onJSON(JSON.parse(body.toString('utf8')))
+        else if (kind === KIND_UDP) this.onDatagram?.(Buffer.from(body))
         else if (kind === KIND_BLOB && body.length >= BLOB_HEADER) {
           this.onBlob(
             body.toString('ascii', 0, 64),
@@ -61,4 +68,4 @@ class Decoder {
   }
 }
 
-module.exports = { encodeJSON, encodeBlob, Decoder }
+module.exports = { encodeJSON, encodeBlob, encodeDatagram, Decoder }

@@ -32,6 +32,7 @@ export const PRESETS = {
 let screenPreset = PRESETS.fluid
 let hwH264 = false
 hasHardwareH264().then((v) => { hwH264 = v })
+const TUNNEL_AFTER_MS = 4000 // sin conexión directa de WebRTC pasado este tiempo, se ofrece el túnel por la red P2P
 const dbg = () => store('dbg') || {} // ajustes de depuración (solo para medir): localStorage hc.dbg
 
 // ───────────── API pública ─────────────
@@ -166,7 +167,7 @@ async function join(ch) {
   applyMute()
   roster = null
   publish()
-  play('join')
+  play('self')
   clearInterval(qualityTimer)
   qualityTimer = setInterval(updateQuality, 3000)
   bus.emit('voice')
@@ -334,8 +335,12 @@ function tuneRemoteSdp(sdp) {
 
 // ───────────── Un enlace WebRTC por amigo ─────────────
 class Link {
-  constructor(id) {
+  constructor(id, tunnelNow = false) {
     this.id = id
+    this.tunnel = false // ¿se le ha dado a WebRTC el túnel por la red P2P como camino de respaldo?
+    this.tunPort = null
+    this.tunApplied = false
+    this.tunnelOnly = (dbg().tunnelOnly || []).includes(id) // solo pruebas: sin candidatos reales, solo el túnel
     this.polite = state.me.id > id // desempate fijo para "perfect negotiation"
     this.makingOffer = false
     this.ignoreOffer = false
@@ -376,9 +381,13 @@ class Link {
         this.sendDescription()
       } catch (e) { console.warn('negotiation', e) } finally { this.makingOffer = false }
     }
-    pc.onicecandidate = ({ candidate }) => { if (candidate) this.send({ k: 'c', c: candidate.toJSON() }) }
+    pc.onicecandidate = ({ candidate }) => { if (candidate && !this.tunnelOnly) this.send({ k: 'c', c: candidate.toJSON() }) }
     pc.ontrack = (e) => this.onTrack(e)
     pc.oniceconnectionstatechange = () => { if (pc.iceConnectionState === 'failed') pc.restartIce() }
+
+    // Si WebRTC no conecta directamente (NAT simétrico, CGNAT de datos móviles), la voz y el vídeo pasan por el túnel UDP
+    // que va dentro de la conexión P2P del chat, que sí atraviesa esas redes.
+    this.tunnelTimer = setTimeout(() => this.startTunnel(true), tunnelNow || this.tunnelOnly ? 0 : TUNNEL_AFTER_MS)
 
     // Si en 10 s no hay audio fluyendo, rehacer el enlace desde cero en ambos extremos.
     this.watchdog = setTimeout(() => this.stalled(), 10000)
@@ -398,7 +407,27 @@ class Link {
   // RTCSessionDescription/RTCIceCandidate no sobreviven al IPC: se envían como objetos planos.
   sendDescription() {
     const { type, sdp } = this.pc.localDescription
-    this.send({ k: 'd', d: { type, sdp } })
+    this.send({ k: 'd', d: { type, sdp: this.tunnelOnly ? sdp.split('\r\n').filter((l) => !l.startsWith('a=candidate')).join('\r\n') : sdp } })
+  }
+
+  /** Activa el túnel: un socket local que WebRTC ve como un candidato más y que lleva los paquetes por la conexión P2P. */
+  async startTunnel(announce) {
+    if (this.tunnel || this.closed) return
+    if (!this.tunnelOnly && this.pc.connectionState === 'connected') return
+    let port = null
+    try { port = await window.humble.tunnelOpen(this.id) } catch {}
+    if (!port || this.closed || this.tunnel) return // sin conexión directa con este amigo no hay túnel posible
+    this.tunnel = true
+    this.tunPort = port
+    if (announce) this.send({ k: 'tun' }) // el otro extremo también debe usarlo
+    this.applyTunnel()
+    bus.emit('voice')
+  }
+
+  /** El candidato se pierde con cada reinicio de ICE, así que se vuelve a dar tras cada descripción remota. */
+  applyTunnel() {
+    if (!this.tunPort || !this.pc.remoteDescription) return
+    this.pc.addIceCandidate({ candidate: `candidate:99 1 udp 1000 127.0.0.1 ${this.tunPort} typ host`, sdpMLineIndex: 0 }).catch(() => {})
   }
 
   enqueue(msg) { this.queue = this.queue.then(() => this.handle(msg)).catch((e) => console.warn('signal', e)) }
@@ -415,6 +444,7 @@ class Link {
       this.settingAnswer = d.type === 'answer'
       await pc.setRemoteDescription({ type: d.type, sdp: tuneRemoteSdp(d.sdp) })
       this.settingAnswer = false
+      this.applyTunnel()
       if (d.type === 'offer') {
         await pc.setLocalDescription()
         this.sendDescription()
@@ -431,6 +461,8 @@ class Link {
       for (const u of pending) this.classify(u.sid, u.track)
       const ai = this.pendingAudio.findIndex((x) => x.stream.id === this.remoteScr)
       if (this.remoteScr && ai >= 0) this.attachScreenAudio(this.pendingAudio.splice(ai, 1)[0].stream)
+    } else if (m.k === 'tun') {
+      this.startTunnel(false)
     } else if (m.k === 'w') {
       this.viewer = !!m.on
       this.syncScreen()
@@ -581,7 +613,8 @@ class Link {
     if (pair) {
       if (pair.currentRoundTripTime != null) out.rtt = Math.round(pair.currentRoundTripTime * 1000)
       const types = [byId.get(pair.localCandidateId)?.candidateType, byId.get(pair.remoteCandidateId)?.candidateType]
-      if (!this.relayedBy) out.path = types.includes('relay') ? 'por relé TURN' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
+      const viaTunnel = [byId.get(pair.remoteCandidateId), byId.get(pair.localCandidateId)].some((c) => (c?.address || c?.ip) === '127.0.0.1')
+      if (!this.relayedBy) out.path = viaTunnel ? 'por túnel de la red P2P' : types.includes('relay') ? 'por relé TURN' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
     }
     const prev = this.prev || {}
     const cur = {}
@@ -638,6 +671,8 @@ class Link {
   close() {
     this.closed = true
     clearTimeout(this.watchdog)
+    clearTimeout(this.tunnelTimer)
+    if (this.tunnel) window.humble.tunnelClose(this.id).catch(() => {})
     this.pc.onnegotiationneeded = this.pc.onicecandidate = this.pc.ontrack = null
     this.pc.close()
     if (!relayedAudio.has(this.id)) this.audio.srcObject = null
@@ -648,8 +683,8 @@ class Link {
   }
 }
 
-function openLink(id) {
-  const link = new Link(id)
+function openLink(id, tunnelNow = false) {
+  const link = new Link(id, tunnelNow)
   links.set(id, link)
   return link
 }
@@ -741,9 +776,10 @@ function rebuild(id, notify) {
   const old = links.get(id)
   const n = (old?.rebuilds || 0) + 1
   if (notify) old?.send({ k: 'r' })
+  const wasTunnel = !!old?.tunnel
   closeLink(id)
   if (!state.voice) return
-  const l = openLink(id)
+  const l = openLink(id, wasTunnel)
   l.rebuilds = n
 }
 
