@@ -42,3 +42,4 @@ Disparar el flujo **Nueva versión** (`.github/workflows/version.yml`, `workflow
 - Archivos grandes y de más riesgo: `src/renderer/voice.js`, `src/renderer/ui/chat.js`, `src/core/node.js`. Cambia con cuidado y con prueba.
 - No se puede probar aquí: Windows (lo cubre el CI de `windows-latest`), hardware real (micro, cámara, H.264 por hardware) y NAT real entre casas.
 - No subas versión ni crees etiquetas salvo que se pida: la etiqueta `v*` dispara la publicación.
+- Autorización de la persona: Claude puede abrir PRs propios y mergearlos a `main` sin preguntar si el CI está en verde en Linux y Windows; Dependabot igual. Solo escribe a la persona si necesita su intervención. Publicar versiones (`version.yml` sin `dry_run`) sigue requiriendo que la persona lo pida.
