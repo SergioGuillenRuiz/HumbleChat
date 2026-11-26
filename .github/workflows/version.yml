@@ -1,0 +1,38 @@
+name: Nueva versión
+
+# Sube la versión, crea la etiqueta y lanza la publicación. Sin pasos manuales:
+# se ejecuta desde Actions (o Claude lo dispara con workflow_dispatch). Solo desde main.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'patch | minor | major'
+        required: true
+        default: patch
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Verificar antes de publicar
+        run: sudo apt-get update && sudo apt-get install -y xvfb && npm run verify:quick
+      - name: Subir versión y etiquetar
+        id: v
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version "${{ inputs.bump }}" -m "Versión %s"
+          echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          git push origin main --follow-tags
+      - name: Lanzar publicación (un push con GITHUB_TOKEN no dispara otros flujos)
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: gh workflow run release.yml --ref "${{ steps.v.outputs.tag }}"

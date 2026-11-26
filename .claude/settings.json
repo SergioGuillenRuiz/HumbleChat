@@ -1,10 +1,88 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run verify:*)",
+      "Bash(npm run dist:*)",
+      "Bash(npm audit:*)",
+      "Bash(npx playwright:*)",
+      "Bash(npx electron-builder:*)",
+      "Bash(node scripts/:*)",
+      "Bash(node test/:*)",
+      "Bash(node --test:*)",
+      "Bash(xvfb-run:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push -u origin claude/*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run report:*)",
+      "Bash(npx eslint:*)",
+      "mcp__github__actions_get",
+      "mcp__github__actions_list",
+      "mcp__github__get_job_logs",
+      "mcp__github__get_check_run",
+      "mcp__github__pull_request_read",
+      "mcp__github__list_pull_requests",
+      "mcp__github__list_commits",
+      "mcp__github__get_file_contents",
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "mcp__Remote_Desktop_Commander__list_devices",
+      "mcp__Remote_Desktop_Commander__read_process_output",
+      "mcp__Remote_Desktop_Commander__list_directory"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(rm -rf /:*)",
+      "Read(./group.key)",
+      "Edit(./group.key)"
+    ]
+  },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-setup.sh\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-stop-check.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate.sh", "timeout": 180 }
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate.sh",
+            "timeout": 180
+          }
         ]
       }
     ]

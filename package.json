@@ -17,7 +17,11 @@
     "dist": "node scripts/build.js all",
     "dist:all": "node scripts/build.js all",
     "test:smoke": "node test/smoke.js",
-    "dist:public": "node scripts/build.js all --public"
+    "dist:public": "node scripts/build.js all --public",
+    "verify": "node scripts/verify.js",
+    "verify:quick": "node scripts/verify.js --quick",
+    "lint": "eslint .",
+    "report": "node scripts/report.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
@@ -28,6 +32,8 @@
   "devDependencies": {
     "electron": "^45.4.1",
     "electron-builder": "^26.18.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
     "playwright": "~1.63.0"
   },
   "homepage": "https://github.com/SergioGuillenRuiz/HumbleChat",
@@ -35,5 +41,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/SergioGuillenRuiz/HumbleChat.git"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
