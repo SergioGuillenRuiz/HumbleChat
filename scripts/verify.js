@@ -14,6 +14,7 @@ const needXvfb = linux && !process.env.DISPLAY
 const root = path.join(__dirname, '..')
 
 const steps = [
+  { name: 'Lint', cmd: ['npm', 'run', 'lint'], gui: false },
   { name: 'Núcleo P2P', cmd: ['npm', 'test'], gui: false },
   { name: 'Prueba de humo', cmd: ['npm', 'run', 'test:smoke'], gui: true },
 ]
