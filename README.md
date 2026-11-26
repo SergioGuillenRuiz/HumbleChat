@@ -26,7 +26,7 @@ Para no depender de los públicos: `node scripts/own-node.js --host <IP pública
 
 ## Problemas conocidos y mejoras pendientes
 
-- Con NAT simétrico o CGNAT estricto, la voz se retransmite a través de otro amigo; si no hay ninguno conectado (o para vídeo y pantalla) hace falta un servidor TURN en `network.json`.
+- Con NAT simétrico o CGNAT estricto, la voz se retransmite a través de otro amigo que tenga conexión directa con los dos (con IP pública o un NAT sencillo); si no hay ninguno (o para vídeo y pantalla) hace falta un servidor TURN en `network.json`. Ese amigo oye el audio que retransmite y ve las señales de la llamada (con las direcciones de red de los dos); van firmadas, así que no puede alterarlas ni hacerse pasar por nadie.
 - Pensado para unas 6 personas en llamada (conexión en malla).
 - Los mensajes directos ocultan el contenido, no su existencia: el grupo puede ver quién escribe a quién y cuándo.
 - El historial se guarda sin cifrar en el disco.

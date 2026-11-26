@@ -54,14 +54,19 @@ const SCENARIOS = [
     desc: 'un lado simétrico y el otro cono, con TURN: la voz pasa por el relé TURN'
   },
   {
-    // HALLAZGO: con dos NAT simétricos no hay conexión directa entre ellos y la presencia de voz ('pres') y la
-    // señalización ('sig') solo viajan por conexiones directas, no se retransmiten por un tercero. Por eso ni
-    // el relé por un amigo (aquí con IP pública y enlace directo a ambos) ni el TURN llegan a activarse: no hay llamada.
-    // El chat sí funciona (los eventos se replican a través del tercero). Si se arregla, esta prueba lo anuncia.
-    name: 'simetrico-simetrico',
+    // Antes era una limitación conocida: la presencia de voz y la señalización solo viajaban por conexiones directas,
+    // así que dos NAT simétricos ni se veían en la llamada. Ahora van por el amigo que los une (src/core/relay.js) y el
+    // audio se retransmite por él, que tiene IP pública y enlace directo con ambos.
+    name: 'simetrico-simetrico-rele-de-amigo',
     clients: [{ nat: 'symmetric', netem: LAN }, { nat: 'symmetric', netem: LAN }, { nat: 'public', netem: LAN }],
-    minVisible: 2, turn: TURN, paths: [isDirect, isTurn, isFriendRelay], voiceLimit: true,
-    desc: 'dos NAT simétricos, un amigo con IP pública y TURN: chat sí; llamada entre los simétricos, limitación conocida'
+    paths: [(p) => isDirect(p) || isFriendRelay(p)], pairPath: { 'Ana-Beto': isFriendRelay },
+    desc: 'dos NAT simétricos y un amigo con IP pública, sin TURN: el audio entre ellos se retransmite por el amigo'
+  },
+  {
+    name: 'simetrico-simetrico-turn',
+    clients: [{ nat: 'symmetric', netem: LAN }, { nat: 'symmetric', netem: LAN }, { nat: 'public', netem: LAN }],
+    turn: TURN, paths: [(p) => isDirect(p) || isTurn(p)], pairPath: { 'Ana-Beto': isTurn },
+    desc: 'dos NAT simétricos con un servidor TURN configurado: el audio entre ellos pasa por el TURN'
   },
   {
     name: 'cgnat-cono',
