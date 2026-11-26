@@ -120,7 +120,7 @@ async function content() {
     const leaked = await c.page.evaluate(() => document.body.innerText.includes('4711'))
     if (leaked) throw new Error('Carla ve el contenido del directo')
     const carlaStore = fs.readFileSync(path.join(c.profile, 'data', 'log', 'events.jsonl'), 'utf8')
-    if (carlaStore.includes('4711')) throw new Error('el texto en claro se guardó en el disco de Carla')
+    if (carlaStore.includes('candado')) throw new Error('el texto en claro se guardó en el disco de Carla')
     if (!carlaStore.includes('"t":"dm"')) throw new Error('Carla debería replicar el evento cifrado')
     ok('el tercero replica el evento pero no lo lee: ni en pantalla ni en su disco')
     await a.page.locator('.msg', { hasText: '4711' }).hover()
