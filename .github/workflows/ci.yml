@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - name: Instalar Xvfb (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
       - name: "Verificación completa (la misma que usa Claude, npm run verify)"
         run: npm run verify
       - name: Subir registros y capturas del fallo
@@ -48,7 +48,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
       - name: Una AppImage vieja se actualiza sola a la nueva y se reinicia
         run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:autoupdate
 
@@ -65,7 +65,7 @@ jobs:
       - run: npm ci
       - name: Dependencias del sistema (espacios de red, nftables, tc, coturn)
         run: |
-          sudo apt-get update
+          sudo apt-get update || true # un repositorio de terceros caído (p. ej. Microsoft, 403) no debe impedir instalar desde los de Ubuntu
           sudo apt-get install -y xvfb iproute2 nftables iputils-ping coturn
           # el módulo netem (latencia y pérdida) va en el paquete extra del núcleo; si no está, la prueba degrada a solo pérdida
           sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
@@ -108,7 +108,7 @@ jobs:
       - name: Empaquetar (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y xvfb libarchive-tools
+          (sudo apt-get update || true) && sudo apt-get install -y xvfb libarchive-tools
           npx electron-builder --config electron-builder.config.js --linux AppImage pacman --x64 --publish never
       - name: Ejecutar la app empaquetada (Windows)
         if: runner.os == 'Windows'

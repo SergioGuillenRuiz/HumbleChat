@@ -34,7 +34,7 @@ jobs:
       - run: npm ci
       - name: Instalar Xvfb (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
       - name: Repetir y contar fallos
         shell: bash
         run: |
@@ -65,7 +65,7 @@ jobs:
       - run: npm ci
       - name: Dependencias del sistema
         run: |
-          sudo apt-get update
+          sudo apt-get update || true # un repositorio de terceros caído (p. ej. Microsoft, 403) no debe impedir instalar desde los de Ubuntu
           sudo apt-get install -y xvfb iproute2 nftables iputils-ping coturn
           sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
           sudo modprobe sch_netem || true
@@ -105,7 +105,7 @@ jobs:
       - run: npm ci
       - name: Instalar Xvfb (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
       - name: Encontrarse, chatear y hablar por la DHT pública
         shell: bash
         # código 3 = chat correcto pero la voz no se estableció: se anota en el resumen sin dar el trabajo por roto
