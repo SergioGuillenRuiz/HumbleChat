@@ -42,9 +42,17 @@ async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile
   await page.setViewportSize({ width: size[0], height: size[1] }).catch(() => {})
   page.on('pageerror', (e) => console.log(`[${name}] pageerror:`, e.message))
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.log(`[${name}] console.${m.type()}:`, m.text()) })
-  await page.waitForSelector(ready, { timeout: 20000 })
   const inst = { app, page, name, profile }
   instancias.push(inst)
+  // La primera ejecución de una app recién empaquetada es lenta (sobre todo en Windows: antivirus y primera ejecución).
+  try {
+    await page.waitForSelector(ready, { timeout: packaged ? 60000 : 20000 })
+  } catch (e) {
+    // Si no arranca, que el fallo deje algo que mirar: qué se veía y qué dirección cargó
+    console.error(`[${name}] la ventana no mostró «${ready}». URL: ${page.url()}`)
+    await capturarFallo(`arranque-${name}`)
+    throw e
+  }
   return inst
 }
 
