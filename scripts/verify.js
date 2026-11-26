@@ -36,7 +36,7 @@ fs.mkdirSync(outDir, { recursive: true })
 function run(cmd, args, file) {
   return new Promise((resolve) => {
     const log = fs.createWriteStream(file)
-    const child = spawn(cmd, args, { cwd: root, shell: win })
+    const child = spawn(cmd, args, { cwd: root, shell: win, stdio: ['ignore', 'pipe', 'pipe'] })
     const tee = (chunk, out) => { out.write(chunk); log.write(chunk) }
     child.stdout.on('data', (c) => tee(c, process.stdout))
     child.stderr.on('data', (c) => tee(c, process.stderr))

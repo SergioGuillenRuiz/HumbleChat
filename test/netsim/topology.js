@@ -50,7 +50,7 @@ function netem(edge, wanIf, peer, { delay = 0, jitter = 0, loss = 0 } = {}) {
   if (loss) args.push('loss', `${loss}%`)
   try {
     inNs(edge, 'tc', ...args)
-    sh('tc', ['qdisc', 'add', 'dev', peer, 'root', 'netem', ...args.slice(5)])
+    sh('tc', ['qdisc', 'add', 'dev', peer, 'root', ...args.slice(5)]) // args.slice(5) ya empieza por 'netem'
     return 'netem'
   } catch {
     if (!loss) return 'ninguna'
