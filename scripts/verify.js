@@ -16,6 +16,7 @@ const steps = [
   { name: 'Lint', cmd: ['npm', 'run', 'lint'], gui: false },
   { name: 'Núcleo P2P', cmd: ['npm', 'test'], gui: false },
   { name: 'Prueba de humo', cmd: ['npm', 'run', 'test:smoke'], gui: true },
+  { name: 'Bloqueo por versión obsoleta', cmd: ['npm', 'run', 'test:gate'], gui: true },
 ]
 if (!quick) {
   if (linux) {

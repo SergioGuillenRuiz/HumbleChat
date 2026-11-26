@@ -7,6 +7,7 @@ import { mountMembers } from './ui/members.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
 import { voice } from './voice.js'
 import { toast } from './ui/overlays.js'
+import { renderGate } from './ui/updategate.js'
 import { play } from './sounds.js'
 import { initTooltips } from './tooltip.js'
 
@@ -87,16 +88,31 @@ async function boot() {
   if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)
 }
 
-/** Aviso de versión nueva: se instalará sola (instalador/AppImage) o se abre la página de descarga. */
+/**
+ * Versión nueva (la actualización es obligatoria). 'grace': plazo para terminar lo que se hace, con cuenta atrás.
+ * 'forced': se tapa toda la aplicación (la red ya está parada) y se sale de la llamada.
+ */
+let graceTimer = null
 function showUpdate(u) {
+  if (u.state === 'grace') {
+    document.querySelector('.update-bar')?.remove()
+    const left = () => Math.max(0, Math.ceil((u.deadline - Date.now()) / 1000))
+    const text = h('span')
+    const bar = h('div.update-bar', text)
+    const tick = () => { text.textContent = `Hay una versión nueva (${u.version}) y es obligatoria: HumbleChat se actualizará en ${left()} s. Termina lo que estés haciendo.` }
+    tick()
+    clearInterval(graceTimer)
+    graceTimer = setInterval(tick, 500)
+    document.querySelector('.shell').parentNode.insertBefore(bar, document.querySelector('.shell'))
+    return
+  }
+  if (u.state !== 'forced') return
+  clearInterval(graceTimer)
   document.querySelector('.update-bar')?.remove()
-  const text = { downloading: `Descargando la versión ${u.version}…`, ready: `La versión ${u.version} está lista.`, available: `Hay una versión nueva (${u.version}).` }[u.state]
-  const bar = h('div.update-bar', h('span', text),
-    u.state === 'ready' && h('button', { onclick: () => window.humble.updateInstall() }, 'Reiniciar para actualizar'),
-    u.state === 'available' && h('button', { onclick: () => window.humble.openExternal(u.url) }, 'Descargar'),
-    h('button', { onclick: () => bar.remove() }, 'Ahora no'))
-  const shell = document.querySelector('.shell')
-  shell.parentNode.insertBefore(bar, shell)
+  if (state.voice) voice.leave() // la red ya no está: se cuelga la llamada en vez de dejar el audio abierto sin control
+  let layer = document.querySelector('.gate-overlay')
+  if (!layer) { layer = h('main.setup.gate.gate-overlay'); document.body.append(layer) }
+  renderGate(layer, u)
 }
 
 function onView() {

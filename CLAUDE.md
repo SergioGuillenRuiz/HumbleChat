@@ -17,6 +17,8 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 | `npm test` | Pruebas unitarias del núcleo y del contenido (`test/core.test.js`, `test/content.test.js`) |
 | `npm run test:smoke` / `test:e2e` / `test:e2e2` | Pruebas con Electron real (en Linux sin pantalla: `xvfb-run -a -s "-screen 0 1920x1080x24" <cmd>`; `verify` lo hace solo) |
 | `npm run test:netsim [filtro]` | Red simulada (solo Linux con root; `apt install iproute2 nftables coturn xvfb`): cada cliente en su espacio de red tras NAT cono/simétrico/CGNAT, con coturn y DHT propios. En CI es el trabajo «Red simulada» |
+| `npm run test:gate` | Bloqueo por versión obsoleta con Electron real (servidor local que hace de «GitHub»). También se ejecuta sobre la app empaquetada en CI |
+| `npm run test:autoupdate` | Autoactualización REAL (solo Linux): construye dos AppImage, la vieja se actualiza sola a la nueva y se reinicia. Tarda ~2 min. Job «Autoactualización real» del CI |
 | `node scripts/flaky.js <nombre> <n> -- <cmd>` | Repite una prueba n veces y cuenta fallos (lo usa el nocturno) |
 | `node test/publicnet.js ana\|beto <llave>` | Prueba con la DHT pública entre dos máquinas (la lanza el nocturno, no se usa en local) |
 | `node test/quality.js audio\|video` | Medidas de calidad, no es pasa/no pasa |
@@ -36,6 +38,12 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 - Si una prueba falla en CI, se suben como artefacto `test-results/` (registros de cada paso, capturas de cada ventana y el informe de Diagnóstico de cada instancia) y `test/shots/`. Léelos antes de adivinar la causa.
 - El flujo **Nocturno** (`nightly.yml`) repite las pruebas decenas de veces, ejecuta la red simulada 3 veces y prueba la DHT pública entre un runner Linux y uno Windows. Su resumen da la tasa de fallos de cada prueba.
 - Limitaciones conocidas que `test:netsim` documenta (si se arreglan, la prueba lo anuncia): la voz no atraviesa NAT simétrico↔cono ni CGNAT sin TURN, y con dos NAT simétricos no hay llamada ni con amigo con IP pública ni con TURN, porque la presencia de voz y la señalización solo viajan por conexiones directas.
+
+## Versión obligatoria (OJO al publicar)
+- La aplicación solo funciona si es la última versión publicada en GitHub (`releases/latest`): al arrancar consulta antes de levantar la red; abierta, cada 30 min (plazo de 30 s y después bloqueo). Instalador de Windows y AppImage se actualizan solos; portable y `.pacman` muestran el enlace de descarga. Sin conexión no se bloquea, salvo que ya se hubiera visto una versión más nueva. Código en `src/main/versiongate.js`, `updatecontroller.js` y `updates.js`.
+- **Cada versión que se publica deja inservibles todas las anteriores que ya llevan el bloqueo (desde la 0.2.1).** Antes de publicar, `npm run verify` completo y el CI en verde. Si una versión publicada resultara rota, **borra su release en GitHub**: la anterior vuelve a ser la última y nadie queda atrapado.
+- Las versiones anteriores a la que incluye este bloqueo (0.2.0) conservan el aviso antiguo no obligatorio.
+- Solo para pruebas: `HUMBLECHAT_NO_UPDATE_GATE=1` lo desactiva (`test/lib.js` lo pone siempre), `HUMBLECHAT_UPDATE_URL` apunta a otro servidor de «última versión», `HUMBLECHAT_UPDATE_AUTO=1` permite la instalación automática con él, y `HUMBLECHAT_UPDATE_GRACE_MS` / `HUMBLECHAT_UPDATE_INTERVAL_MS` ajustan los tiempos.
 
 ## Releases (sin pasos manuales)
 Disparar el flujo **Nueva versión** (`.github/workflows/version.yml`, `workflow_dispatch`, input `bump`: patch|minor|major) sobre `main` con `mcp__github__actions_run_trigger`. Verifica, sube versión, etiqueta y lanza `release.yml`. Solo cuando la persona lo pida. Dependabot abre PRs semanales de dependencias.

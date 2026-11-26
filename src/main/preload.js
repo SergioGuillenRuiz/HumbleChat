@@ -43,5 +43,8 @@ contextBridge.exposeInMainWorld('humble', {
   pttRecord: call('ptt:record'),
   updateInstall: call('update:install'),
   updateCheck: call('update:check'),
+  updateState: call('update:state'),
+  updateRecheck: call('update:recheck'),
+  quit: call('app:quit'),
   onMessage: (cb) => ipcRenderer.on('hc', (_e, msg) => cb(msg))
 })

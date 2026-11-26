@@ -31,6 +31,7 @@ async function launch(net, name, { fakeMedia = true, size = [1280, 800], profile
     ...(packaged || noKey ? {} : { HUMBLECHAT_KEY: net.key }), // empaquetada: usa la group.key incluida
     ...(noKey ? { HUMBLECHAT_NO_AUTOKEY: '1' } : {}),
     HUMBLECHAT_NO_SANDBOX: '1',
+    HUMBLECHAT_NO_UPDATE_GATE: '1', // las pruebas no dependen de GitHub; test/gate.js lo activa a propósito
     ...(fakeMedia ? { HUMBLECHAT_FAKE_MEDIA: '1' } : {}),
     HUMBLECHAT_W: String(size[0]),
     HUMBLECHAT_H: String(size[1]),

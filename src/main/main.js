@@ -60,6 +60,7 @@ let pendingScreenId = null
 let pendingAudio = false
 let settings = null
 let updates = null
+let gateMode = false // la versión es obsoleta: sin red, sin bandeja; cerrar la ventana cierra la aplicación
 let tray = null
 let trayOk = false
 let trayNoticeShown = false
@@ -233,7 +234,7 @@ function createWindow(page = 'index') {
   win.on('close', (e) => {
     saveBounds()
     if (forceClose || quitting) return
-    if (tray && settings.get('tray')) {
+    if (tray && settings.get('tray') && !gateMode) {
       e.preventDefault()
       win.hide()
       if (!trayNoticeShown && Notification.isSupported()) {
@@ -432,6 +433,9 @@ function setupIpc() {
   // ── Actualizaciones ──
   handle('update:install', () => updates?.install())
   handle('update:check', () => updates?.check())
+  handle('update:state', () => { rendererReady = true; return updates?.state() ?? null }) // la pantalla de bloqueo no llama a 'init'
+  handle('update:recheck', () => updates?.recheck())
+  handle('app:quit', () => { forceClose = true; app.quit() })
 }
 
 /** Cambiar de sala sin reiniciar: se guarda la llave, se arranca la red de nuevo y se recarga la interfaz. */
@@ -508,6 +512,15 @@ app.whenReady().then(async () => {
   registerProtocol()
   setupSession()
   setupIpc()
+  updates = startUpdates({
+    send,
+    settings,
+    onForced: () => { gateMode = true },
+    stopNetwork: async () => { const n = node; node = null; await n?.stop().catch(() => {}) }
+  })
+  // Antes de tocar la red: si esta versión ya no es la última, no se arranca nada más (ni nodo, ni bandeja, ni teclas).
+  const gate = await updates.gateAtStartup()
+  if (gate.block) { createWindow('gate'); return }
   readNetwork()
   ptt.init(send)
   trayOk = await trayHostAvailable()
@@ -518,5 +531,5 @@ app.whenReady().then(async () => {
   await applyTray()
   createWindow(key ? 'index' : 'setup')
   applyAutostart(settings.get('autostart'))
-  updates = startUpdates({ send, enabled: () => settings.get('updates') })
+  updates.beginPeriodic()
 })
