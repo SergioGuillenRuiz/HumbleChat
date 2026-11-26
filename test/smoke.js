@@ -36,7 +36,8 @@ async function volcarDiagnostico(instancias) {
   } catch (e) {
     console.error('SMOKE FALLO:', e.message)
     process.exitCode = 1
-    await volcarDiagnostico([['Ana', a], ['Beto', b]]) // si falla en CI, que el registro diga por qué
+    // si falla en CI, que el registro diga por qué; con tope de tiempo para que una ventana colgada no retrase la salida
+    await Promise.race([volcarDiagnostico([['Ana', a], ['Beto', b]]), new Promise((r) => setTimeout(r, 30000))])
   } finally {
     await a.app.close().catch(() => {})
     await b.app.close().catch(() => {})
