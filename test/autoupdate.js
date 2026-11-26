@@ -113,7 +113,10 @@ function build(version, out, feed) {
     killMarked()
     server.closeAllConnections?.()
     server.close()
-    fs.rmSync(tmp, { recursive: true, force: true })
+    // Se espera a que las aplicaciones mueran (siguen escribiendo en su perfil) y la limpieza nunca altera el resultado.
+    for (let i = 0; i < 20 && marked().length; i++) { killMarked(); await sleep(250) }
+    await sleep(1500) // los procesos recién matados terminan de soltar sus ficheros
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 300 }) } catch (e) { console.error('(no se pudo borrar ' + tmp + ': ' + e.code + ')') }
     process.exit(process.exitCode || 0)
   }
 })()
