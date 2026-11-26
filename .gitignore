@@ -7,3 +7,5 @@ group.key
 /test/shots/
 network.json
 /test/voice-like.wav
+/.claude/.last-verified
+/.claude/settings.local.json

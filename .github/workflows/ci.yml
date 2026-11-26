@@ -21,26 +21,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Núcleo P2P
-        run: npm test
       - name: Instalar Xvfb (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb
-      - name: Prueba de humo (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:smoke
-      - name: Prueba de humo (Windows)
-        if: runner.os == 'Windows'
-        run: npm run test:smoke
-      - name: Interfaz completa, 3 instancias (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:e2e
-      - name: Contenido, audio y voz con relé (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:e2e2
-      - name: Contenido de la interfaz (Windows)
-        if: runner.os == 'Windows'
-        run: node test/e2e2.js contenido
+      - name: Verificación completa (la misma que usa Claude: npm run verify)
+        run: npm run verify
 
   paquete:
     name: Paquete y ejecución (${{ matrix.os }})

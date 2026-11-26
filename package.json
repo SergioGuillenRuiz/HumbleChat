@@ -17,7 +17,9 @@
     "dist": "node scripts/build.js all",
     "dist:all": "node scripts/build.js all",
     "test:smoke": "node test/smoke.js",
-    "dist:public": "node scripts/build.js all --public"
+    "dist:public": "node scripts/build.js all --public",
+    "verify": "node scripts/verify.js",
+    "verify:quick": "node scripts/verify.js --quick"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
@@ -35,5 +37,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/SergioGuillenRuiz/HumbleChat.git"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
