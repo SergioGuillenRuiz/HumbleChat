@@ -16,6 +16,10 @@ if (process.getuid() !== 0) { // se vuelve a lanzar con privilegios conservando 
   process.exit(r.status ?? 1)
 }
 
+// Electron se descarga la primera vez que se usa: se hace aquí, una sola vez, para que los clientes (que arrancan a la
+// vez) no compitan por la descarga y se pisen.
+try { require('electron') } catch (e) { console.error('Electron no está disponible:', e.message); process.exit(1) }
+
 const createTestnet = require('hyperdht/testnet')
 const { setup, teardown, HOST_IP } = require('./netsim/topology')
 
