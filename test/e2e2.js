@@ -203,10 +203,8 @@ async function sistema() {
   const mk = async (name, o = {}) => { const p = await launch(net, name, o); apps.push(p); return p }
   const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
   try {
-    console.log('Sala, código y avisos de versión')
-    const web = http.createServer((_q, r) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify({ tag_name: 'v9.9.9', html_url: 'http://localhost/descarga' })) })
-    await new Promise((r) => web.listen(0, '127.0.0.1', r))
-    const a = await mk('Ana', { env: { HUMBLECHAT_UPDATE_URL: `http://127.0.0.1:${web.address().port}/`, HUMBLECHAT_UPDATE_DELAY: '500' } })
+    console.log('Sala y código (el bloqueo por versión se prueba en test/gate.js)')
+    const a = await mk('Ana')
     const b = await mk('Beto', { noKey: true, ready: '.setup' })
     await b.page.fill('#code', 'esto no vale'); await b.page.click('#join')
     await waitFor(async () => /no es válido/.test(await b.page.textContent('#error')), 5000, 'error de código')
@@ -215,9 +213,6 @@ async function sistema() {
     await b.page.waitForSelector('.sb-header', { timeout: 20000 })
     await waitFor(async () => (await count(a, '.member:not(.offline)')) === 2, 25000, 'se ven tras unirse')
     ok('Beto entra pegando el código (en mayúsculas y con guiones) y se encuentra con Ana')
-    await a.page.waitForSelector('.update-bar', { timeout: 15000 })
-    if (!/9\.9\.9/.test(await a.page.textContent('.update-bar'))) throw new Error('el aviso no menciona la versión')
-    ok('Ana ve el aviso de la versión 9.9.9 publicada')
     await b.page.locator('.up-btns .icon-btn').last().click()
     await b.page.locator('.st-item', { hasText: 'Sala' }).click()
     await b.page.waitForSelector('.fp')
@@ -230,7 +225,6 @@ async function sistema() {
     await b.page.waitForSelector('.sb-header', { timeout: 20000 })
     await waitFor(async () => (await count(a, '.member.offline')) === 1, 30000, 'A ya no ve a B')
     ok('rotación de llave: con la sala nueva, Ana y Beto dejan de verse')
-    web.close()
     await close()
 
     console.log('Audio: supresión de ruido, umbral y pulsar para hablar')

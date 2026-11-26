@@ -13,7 +13,7 @@ const sep = process.argv.indexOf('--')
 const [name, reps] = process.argv.slice(2, sep)
 const cmd = process.argv.slice(sep + 1)
 const n = Number(reps)
-if (sep < 0 || !name || !(n > 0) || !cmd.length) {
+if (sep < 0 || !name || !Number.isInteger(n) || n < 1 || !cmd.length) {
   console.error('Uso: node scripts/flaky.js <nombre> <repeticiones> -- <comando> [args…]')
   process.exit(2)
 }

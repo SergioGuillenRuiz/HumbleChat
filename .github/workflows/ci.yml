@@ -37,6 +37,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  autoactualizacion:
+    name: Autoactualización real (AppImage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Una AppImage vieja se actualiza sola a la nueva y se reinicia
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:autoupdate
+
   red-simulada:
     name: Red simulada (NAT, latencia, TURN)
     runs-on: ubuntu-latest
@@ -105,6 +120,26 @@ jobs:
         env:
           HC_EXE: ${{ github.workspace }}/dist/linux-unpacked/humblechat
         run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:smoke
+      - name: Bloqueo por versión en la app empaquetada (Windows)
+        if: runner.os == 'Windows'
+        env:
+          HC_EXE: ${{ github.workspace }}\dist\win-unpacked\humblechat.exe
+        run: npm run test:gate
+      - name: Bloqueo por versión en la app empaquetada (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HC_EXE: ${{ github.workspace }}/dist/linux-unpacked/humblechat
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:gate
+      - name: Subir registros del fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fallo-paquete-${{ matrix.os }}
+          path: |
+            test-results/
+            test/shots/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Listar resultados
         shell: bash
         run: ls -la dist | grep -E "exe|zip|AppImage|pacman" || true

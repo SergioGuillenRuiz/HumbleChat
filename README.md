@@ -9,7 +9,7 @@ Chat de texto, voz y vídeo para un grupo pequeño de amigos. Sin servidor, sin 
 - Voz, cámara y pantalla compartida en alta calidad, con supresión de ruido, umbral de sensibilidad y pulsar para hablar con tecla global.
 - Sin host fijo: el primero que abre la aplicación crea la sala y los demás se unen. El historial se guarda en cada equipo.
 - Conexiones cifradas, mensajes firmados por su autor y acceso solo con el código de sala.
-- Bandeja del sistema, inicio automático, aviso de mensajes sin leer y actualizaciones.
+- Bandeja del sistema, inicio automático, aviso de mensajes sin leer y actualizaciones automáticas obligatorias.
 
 ## Servicios externos
 
@@ -33,7 +33,7 @@ Para no depender de los públicos: `node scripts/own-node.js --host <IP pública
 - Quien tiene el código de sala lee todo el historial. Para echar a alguien hay que crear una sala nueva (Ajustes, Sala) y repartir el código nuevo; el historial no se traslada.
 - El audio del sistema al compartir pantalla solo existe en Windows y puede incluir las voces de la llamada.
 - En Wayland la tecla global de pulsar para hablar puede no funcionar.
-- En Windows el programa no está firmado: SmartScreen mostrará un aviso. La actualización automática solo funciona con el instalador y el AppImage; en el resto se avisa de la versión nueva.
+- En Windows el programa no está firmado: SmartScreen mostrará un aviso. Las actualizaciones son obligatorias: la aplicación no se conecta ni deja usar el chat si no es la última versión. Con el instalador y el AppImage se actualiza sola; con el portable y el .pacman hay que descargar la nueva a mano.
 
 ## Instalación y uso
 

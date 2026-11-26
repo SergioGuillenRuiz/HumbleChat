@@ -6,7 +6,7 @@ const path = require('path')
 const DEFAULTS = {
   tray: true, // al cerrar la ventana, seguir en la bandeja (si el sistema tiene bandeja)
   autostart: false, // iniciar con el sistema
-  updates: true, // buscar versiones nuevas
+  latestSeen: '', // la última versión publicada que se llegó a ver (para bloquear una versión vieja aunque no haya conexión)
   linkPreviews: true // crear vistas previas de los enlaces que envío
 }
 

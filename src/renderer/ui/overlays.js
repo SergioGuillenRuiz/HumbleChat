@@ -544,9 +544,8 @@ export function openSettings(voice, startTab = 'account') {
     return h('div', h('h2', 'Aplicación'),
       sw('Seguir en la bandeja al cerrar la ventana', 'La aplicación (y tu llamada) sigue abierta; se sale desde el icono de la bandeja. Solo si tu escritorio tiene bandeja.', 'tray'),
       sw('Iniciar con el sistema', 'Se abre sola al encender el ordenador, en segundo plano.', 'autostart'),
-      sw('Buscar actualizaciones', 'Avisa o instala las versiones nuevas. Solo consulta las publicaciones públicas del proyecto.', 'updates'),
       sw('Vistas previas de enlaces', 'Al enviar un enlace, se añade su título y descripción para todos. Solo tu equipo visita la página, una vez.', 'linkPreviews'),
-      h('div.sw-row', h('div', h('div.sw-label', 'Versión ' + state.version), h('div.muted', 'Comprueba si hay una versión nueva ahora mismo.')),
+      h('div.sw-row', h('div', h('div.sw-label', 'Versión ' + state.version), h('div.muted', 'Las actualizaciones son obligatorias: HumbleChat solo funciona con la última versión. Solo se consultan las publicaciones públicas del proyecto.')),
         h('button.btn.secondary.small', { onclick: () => { window.humble.updateCheck(); toast('Buscando actualizaciones…') } }, 'Buscar ahora')))
   }
 
