@@ -4,6 +4,20 @@
 //   Linux sin pantalla:  xvfb-run -a node test/smoke.js      Windows:  node test/smoke.js
 const { startNet, launch, waitFor } = require('./lib')
 
+// Estado de voz y pestaña Diagnóstico de cada instancia, para poder analizar un fallo intermitente sin reproducirlo.
+async function volcarDiagnostico(instancias) {
+  for (const [nombre, p] of instancias) {
+    try {
+      console.error(`--- Diagnóstico de ${nombre} ---`)
+      console.error('Usuarios en la llamada:', JSON.stringify(await p.page.$$eval('.vuser', (els) => els.map((e) => ({ texto: e.textContent.trim().slice(0, 30), clases: e.className })))))
+      await p.page.locator('.up-btns .icon-btn').last().click({ timeout: 5000 })
+      await p.page.locator('.st-item', { hasText: 'Diagnóstico' }).click({ timeout: 5000 })
+      await p.page.waitForTimeout(2500)
+      console.error(await p.page.locator('pre.diag').textContent({ timeout: 5000 }))
+    } catch (err) { console.error(`(no se pudo obtener el diagnóstico de ${nombre}: ${err.message})`) }
+  }
+}
+
 ;(async () => {
   const net = await startNet()
   const a = await launch(net, 'Ana')
@@ -22,6 +36,7 @@ const { startNet, launch, waitFor } = require('./lib')
   } catch (e) {
     console.error('SMOKE FALLO:', e.message)
     process.exitCode = 1
+    await volcarDiagnostico([['Ana', a], ['Beto', b]]) // si falla en CI, que el registro diga por qué
   } finally {
     await a.app.close().catch(() => {})
     await b.app.close().catch(() => {})
