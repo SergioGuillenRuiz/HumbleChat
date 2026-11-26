@@ -5,7 +5,7 @@
 // WebRTC con micro falso), pantalla compartida y que todo siga si el primero en entrar se va.
 const fs = require('fs')
 const path = require('path')
-const { startNet, launch, sleep, waitFor } = require('./lib')
+const { startNet, launch, sleep, waitFor, capturarFallo } = require('./lib')
 const { file: WAV } = require('./make-wav') // audio tipo voz para medir el bitrate real de Opus
 
 const SHOTS = path.join(__dirname, 'shots')
@@ -255,6 +255,7 @@ const ok = (msg) => { passed++; console.log('  ✔', msg) }
   } catch (e) {
     console.error('\nFALLO:', e.message)
     for (const p of apps) await shot(p, 'fallo-' + p.name).catch(() => {})
+    await capturarFallo('e2e')
     process.exitCode = 1
   } finally {
     for (const p of apps) await p.app.close().catch(() => {})

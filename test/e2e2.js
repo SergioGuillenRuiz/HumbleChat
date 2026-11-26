@@ -7,7 +7,7 @@ const os = require('os')
 const path = require('path')
 const http = require('http')
 const crypto = require('crypto')
-const { startNet, launch, sleep, waitFor } = require('./lib')
+const { startNet, launch, sleep, waitFor, capturarFallo } = require('./lib')
 const { file: WAV } = require('./make-wav')
 const { execSync } = require('child_process')
 const { formatCode, fingerprint } = require('../src/core/groupkey')
@@ -182,6 +182,9 @@ async function content() {
     if (hits) throw new Error('la app visitó un servidor local')
     if ((await count(a, '.embed')) !== 1) throw new Error('no debería haber vista previa de una dirección privada')
     ok('un enlace a la red local no se visita ni se previsualiza (protección SSRF en la app real)')
+  } catch (e) {
+    await capturarFallo('e2e2')
+    throw e
   } finally {
     for (const p of apps) await p.app.close().catch(() => {})
     web.close()
@@ -322,6 +325,9 @@ async function sistema() {
     for (let i = 0; i < 4 && !(await count(l, '.src-card')); i++) await sleep(1500)
     if ((await count(l, '.chk')) !== 0) throw new Error('fuera de Windows no debe ofrecerse el audio del sistema')
     ok('la casilla "audio del sistema" aparece en Windows y no en Linux')
+  } catch (e) {
+    await capturarFallo('e2e2')
+    throw e
   } finally {
     for (const p of apps) await p.app.close().catch(() => {})
     await net.testnet.destroy().catch(() => {})

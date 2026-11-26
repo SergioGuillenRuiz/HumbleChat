@@ -9,3 +9,4 @@ network.json
 /test/voice-like.wav
 /.claude/.last-verified
 /.claude/settings.local.json
+/test-results/

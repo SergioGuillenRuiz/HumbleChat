@@ -21,7 +21,8 @@
     "verify": "node scripts/verify.js",
     "verify:quick": "node scripts/verify.js --quick",
     "lint": "eslint .",
-    "report": "node scripts/report.js"
+    "report": "node scripts/report.js",
+    "test:netsim": "node test/netsim.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
