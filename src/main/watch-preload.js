@@ -15,6 +15,12 @@
     return o;
   };
 
+  // Solo se quiere el audio: la calidad de imagen más baja desde el primer instante (arranca antes y gasta lo mínimo)
+  try {
+    const now = Date.now();
+    localStorage.setItem('yt-player-quality', JSON.stringify({ data: JSON.stringify({ quality: 144, previousQuality: 144 }), expiration: now + 30 * 24 * 3600 * 1000, creation: now }));
+  } catch {}
+
   // La respuesta que viene dentro de la propia página
   let initial;
   try {
