@@ -57,9 +57,11 @@ async function updateQuality() {
 
 /** Puentes para las funciones que viajan por las conexiones de la llamada (utilidades, música): voice.js solo reparte. */
 export const utilBus = { handler: null }
-export const musicBus = { handler: null, onLink: null }
+export const musicBus = { handler: null, onLink: null, onPlayer: null }
 /** Manda un mensaje a todos los que están en la llamada. */
 export function sendToCall(msg) { for (const l of links.values()) l.send(msg) }
+/** Manda un mensaje a una persona de la llamada. */
+export function sendToPeer(id, msg) { links.get(id)?.send(msg) }
 
 export function isMuted() { return !!state.voice && (state.voice.muted || state.voice.deafened) }
 
@@ -715,6 +717,7 @@ class Link {
 function openLink(id, tunnelNow = false) {
   const link = new Link(id, tunnelNow)
   links.set(id, link)
+  musicBus.onLink?.(id) // quien ya tiene música en marcha se la cuenta al que llega (con el enlace ya registrado, para poder escribirle)
   return link
 }
 

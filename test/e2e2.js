@@ -399,6 +399,158 @@ async function utilidades() {
   }
 }
 
+/**
+ * «Escuchar juntos» con tres aplicaciones reales y un YouTube simulado (HUMBLECHAT_FAKE_MUSIC: el reproductor es el de siempre, en su
+ * ventana oculta y aislada, pero con un `YT` de mentira con reloj propio; la primera letra del id decide: S dura 6 s, L 240 s,
+ * M 20 s, E da el error 150 y N no se puede incrustar). Lo que NO se puede probar aquí es YouTube de verdad.
+ */
+async function musica() {
+  const net = await startNet()
+  const apps = []
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  const env = { HUMBLECHAT_FAKE_MUSIC: '1' }
+  const [CORTA, LARGA, MEDIA, ERROR, NOINCRUSTA] = ['Scorta00001', 'Larga000001', 'Media000001', 'Error000001', 'Nope0000001']
+  // Lo que cuenta el reproductor de cada instancia (su ventana oculta), o null si no tiene
+  const reproductor = (p) => p.app.evaluate(async ({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().startsWith('http://127.0.0.1'))
+    return w ? w.webContents.executeJavaScript('window.__player ? window.__player.snapshot() : null') : null
+  })
+  const en = async (p, st) => { const r = await reproductor(p); return r && r.st === st ? r : null }
+  const panel = (p) => p.page.locator('.music-dock')
+  const abrir = async (p) => { if (!(await panel(p).count())) await p.page.locator('.vcontrols [data-music="1"]').click(); await panel(p).waitFor({ timeout: 5000 }) }
+  const pegar = async (p, id) => { await abrir(p); await p.page.fill('.music-dock .mu-add input', 'https://youtu.be/' + id); await p.page.keyboard.press('Enter') }
+  const cola = (p) => count(p, '.music-dock .mu-q')
+  const entrar = (p) => p.page.locator('.vch .ch', { hasText: 'General' }).click()
+  const pulsar = (p, mu) => p.page.locator(`.music-dock [data-mu="${mu}"]`).click()
+  const todos = (ps, f, ms, what) => waitFor(async () => { for (const p of ps) if (!(await f(p))) return false; return true }, ms, what)
+  try {
+    console.log('Escuchar juntos (música sincronizada en la llamada)')
+    const a = await launch(net, 'Ana', { env }); apps.push(a)
+    const b = await launch(net, 'Beto', { env }); apps.push(b)
+    const c = await launch(net, 'Carla', { env }); apps.push(c)
+    for (const p of [a, b, c]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 3, 30000, 'se ven')
+    for (const p of [a, b]) await entrar(p)
+    for (const p of [a, b]) await waitFor(async () => (await count(p, '.vuser')) === 2 && (await count(p, '.callpanel')) === 1, 20000, 'Ana y Beto en la llamada')
+
+    // Ana pone una canción: suena para ella; Beto se entera pero no la oye hasta que decida
+    await pegar(a, LARGA)
+    await waitFor(() => en(a, 'playing'), 15000, 'suena en el equipo de Ana')
+    if ((await a.page.locator('.music-dock .mu-title').textContent()) !== 'Canción Larga') throw new Error('el título no es el de la consulta (oEmbed)')
+    await b.page.locator('.toast', { hasText: 'ha puesto música' }).waitFor({ timeout: 15000 })
+    await waitFor(async () => (await b.page.locator('.vcontrols [data-music="1"].ping').count()) === 1, 5000, 'el botón de Beto llama la atención')
+    if (await reproductor(b)) throw new Error('Beto no ha elegido escuchar y ya tiene un reproductor')
+    await abrir(b)
+    await waitFor(async () => (await cola(b)) === 1, 10000, 'Beto ve la cola de Ana')
+    if ((await b.page.locator('.music-dock [data-mu="listen"]').textContent()) !== 'Escuchar juntos') throw new Error('el botón de Beto debería ofrecer escuchar')
+    ok('Ana pone música: a ella le suena y Beto ve la cola, recibe el aviso y NO la oye hasta decidirlo')
+    await pulsar(b, 'listen')
+    await waitFor(() => en(b, 'playing'), 15000, 'suena en el equipo de Beto')
+    const [pa, pb] = [await reproductor(a), await reproductor(b)]
+    if (pa.n !== pb.n || Math.abs(pa.pos - pb.pos) > 4) throw new Error(`no están sincronizados: ${pa.pos} / ${pb.pos}`)
+    ok(`Beto elige escuchar y entra en el mismo punto (${pa.pos.toFixed(1)} s / ${pb.pos.toFixed(1)} s)`)
+
+    // Pausa y reanuda: lo ve todo el mundo
+    await pulsar(a, 'play')
+    await todos([a, b], (p) => en(p, 'paused'), 10000, 'los dos en pausa')
+    await pulsar(b, 'play') // y lo reanuda otra persona, no la que pausó
+    await todos([a, b], (p) => en(p, 'playing'), 10000, 'los dos suenan otra vez')
+    ok('pausar (Ana) y reanudar (Beto) se aplica a los dos')
+
+    // Buscar un punto: clic en la barra (Ana)
+    await waitFor(async () => (await a.page.locator('.mu-times span').last().textContent()) === '4:00', 8000, 'se conoce la duración')
+    const box = await a.page.locator('.mu-bar').boundingBox()
+    await a.page.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2)
+    await waitFor(async () => { const [x, y] = [await reproductor(a), await reproductor(b)]; return Math.abs(x.pos - 120) < 8 && Math.abs(y.pos - x.pos) < 4 }, 15000, 'los dos saltan a la mitad')
+    ok('buscar un punto en la barra: los dos saltan a la mitad de la canción')
+
+    // Un reproductor que se desvía se corrige solo
+    await b.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().startsWith('http://127.0.0.1')).webContents.executeJavaScript('window.__player.nudge(-60)'))
+    await waitFor(async () => { const [x, y] = [await reproductor(a), await reproductor(b)]; return Math.abs(y.pos - x.pos) < 4 }, 20000, 'Beto se vuelve a sincronizar')
+    ok('si el reproductor de Beto se atrasa 60 s, vuelve solo a la posición de los demás')
+
+    // Beto añade otra canción: se pone en cola, no interrumpe lo que suena
+    await pegar(b, CORTA)
+    await waitFor(async () => (await cola(a)) === 2 && (await cola(b)) === 2, 10000, 'las dos colas tienen 2')
+    if ((await a.page.locator('.music-dock .mu-q.now .mu-qn').textContent()) !== 'Canción Larga') throw new Error('añadir no debe cambiar lo que suena')
+    ok('Beto añade una canción: llega a la cola de Ana y no interrumpe la que suena')
+
+    // Carla llega tarde a la llamada: recibe la cola y la posición de ahora
+    await entrar(c)
+    await waitFor(async () => (await count(c, '.vuser')) === 3, 20000, 'Carla en la llamada')
+    await abrir(c)
+    await waitFor(async () => (await cola(c)) === 2, 20000, 'Carla recibe la cola')
+    await pulsar(c, 'listen')
+    await waitFor(() => en(c, 'playing'), 15000, 'suena en el equipo de Carla')
+    const [xa, xc] = [await reproductor(a), await reproductor(c)]
+    if (xa.n !== xc.n || Math.abs(xa.pos - xc.pos) > 5) throw new Error(`Carla no entra en el mismo punto: ${xa.pos} / ${xc.pos}`)
+    ok(`Carla llega tarde: recibe la cola y entra donde va la música (${xc.pos.toFixed(0)} s)`)
+
+    // Saltar a la corta (la última): al acabar, la cola se agota y todos paran
+    await a.page.locator('.music-dock .mu-q').nth(1).click()
+    await todos([a, b, c], async (p) => { const r = await reproductor(p); return r && r.dur === 6 && r.st !== 'loading' }, 15000, 'todos cargan la corta')
+    await todos([a, b, c], async (p) => (await p.page.locator('.music-dock .mu-empty b').textContent().catch(() => '')) === 'Se acabó la cola', 30000, 'se acaba la cola')
+    await todos([a, b, c], async (p) => { const r = await reproductor(p); return r && r.st === 'none' }, 10000, 'los reproductores paran')
+    ok('saltar a una canción desde la cola la pone en los tres; al acabar la última, todos paran a la vez')
+
+    // Añadir con la cola agotada vuelve a arrancar para todos los que escuchan
+    await pegar(b, MEDIA)
+    await todos([a, b, c], (p) => en(p, 'playing'), 15000, 'vuelve a sonar')
+    await pulsar(a, 'next')
+    await todos([a, b, c], async (p) => (await p.page.locator('.music-dock .mu-empty b').textContent().catch(() => '')) === 'Se acabó la cola', 15000, 'siguiente agota la cola')
+    ok('añadir con la cola agotada vuelve a sonar para todos; «siguiente» en la última la agota')
+
+    // Casos de error
+    await pegar(a, ERROR)
+    await a.page.locator('.toast', { hasText: 'no permite reproducirlo' }).waitFor({ timeout: 15000 })
+    await todos([a, b, c], async (p) => (await p.page.locator('.music-dock .mu-empty b').textContent().catch(() => '')) === 'Se acabó la cola', 15000, 'el vídeo roto se salta solo')
+    ok('un vídeo que YouTube no deja reproducir avisa y se salta solo')
+    const antes = await cola(a)
+    await pegar(a, NOINCRUSTA)
+    await a.page.locator('.toast', { hasText: 'no permite reproducir ese vídeo' }).waitFor({ timeout: 10000 })
+    await a.page.fill('.music-dock .mu-add input', 'https://ejemplo.com/hola')
+    await a.page.keyboard.press('Enter')
+    await a.page.locator('.toast', { hasText: 'enlace de un vídeo de YouTube' }).waitFor({ timeout: 5000 })
+    if ((await cola(a)) !== antes) throw new Error('no debía entrar nada en la cola')
+    ok('un vídeo que no se puede incrustar y un enlace que no es de YouTube se rechazan al añadir, sin tocar la cola')
+
+    // Ensordecer silencia la música; el volumen es de cada uno
+    await pegar(a, 'Larga000002')
+    await todos([a, b, c], (p) => en(p, 'playing'), 15000, 'suena la segunda larga')
+    await b.page.evaluate(async () => { const { voice } = await import('/voice.js'); voice.toggleDeafen() })
+    await waitFor(async () => (await reproductor(b)).mute === true, 5000, 'Beto, ensordecido, no oye la música')
+    if ((await reproductor(a)).mute) throw new Error('la música de Ana no debía silenciarse')
+    await b.page.evaluate(async () => { const { voice } = await import('/voice.js'); voice.toggleDeafen() })
+    await waitFor(async () => (await reproductor(b)).mute === false, 5000, 'Beto vuelve a oír la música')
+    await b.page.evaluate(() => { const s = document.querySelector('.mu-vol'); s.value = 30; s.dispatchEvent(new Event('input')) })
+    await waitFor(async () => (await reproductor(b)).vol === 30, 5000, 'el volumen de Beto')
+    if ((await reproductor(a)).vol === 30) throw new Error('el volumen es personal')
+    ok('ensordecer silencia la música de quien se ensordece; el volumen es de cada uno')
+
+    // Dos personas añaden a la vez: no se pierde ninguna
+    const n0 = await cola(a)
+    await Promise.all([pegar(a, 'Larga000003'), pegar(b, 'Larga000004')])
+    await todos([a, b, c], async (p) => (await cola(p)) === n0 + 2, 15000, 'las dos canciones están en las tres colas')
+    const orden = await Promise.all([a, b, c].map((p) => p.page.locator('.music-dock .mu-q').evaluateAll((els) => els.map((e) => e.dataset.n).join(','))))
+    if (new Set(orden).size !== 1) throw new Error('las colas no coinciden: ' + orden.join(' | '))
+    ok('dos personas añaden a la vez: las dos canciones llegan y las tres colas quedan idénticas')
+
+    // Dejar de escuchar solo apaga lo propio; colgar apaga la música y cierra el reproductor
+    await pulsar(c, 'listen')
+    await waitFor(async () => (await reproductor(c))?.st === 'none', 8000, 'Carla deja de escuchar')
+    if (!(await en(a, 'playing')) || !(await en(b, 'playing'))) throw new Error('los demás debían seguir escuchando')
+    await a.page.locator('.callpanel button[aria-label="Desconectar"]').click()
+    await waitFor(async () => (await reproductor(a)) === null && (await panel(a).count()) === 0, 10000, 'al colgar se cierra el reproductor de Ana')
+    if (!(await en(b, 'playing'))) throw new Error('Beto debía seguir escuchando')
+    ok('dejar de escuchar solo apaga la música propia; colgar cierra el reproductor y el panel')
+  } catch (e) {
+    await capturarFallo('e2e2-musica')
+    throw e
+  } finally {
+    await close()
+    await net.testnet.destroy().catch(() => {})
+  }
+}
+
 /** Inactividad en una llamada, con la aplicación real y tiempos cortos (el sistema "lleva horas inactivo" por HUMBLECHAT_FAKE_IDLE). */
 async function afk() {
   const net = await startNet()
@@ -616,6 +768,7 @@ async function tunel() {
   if (!only || only === 'salas') await salas()
   if (!only || only === 'afk') await afk()
   if (!only || only === 'utilidades') await utilidades()
+  if (!only || only === 'musica') await musica()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })

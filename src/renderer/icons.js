@@ -41,7 +41,12 @@ const P = {
   dice: '<rect x="3.5" y="3.5" width="17" height="17" rx="3.5" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="8.5" cy="8.5" r="1.5"/><circle cx="15.5" cy="8.5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="8.5" cy="15.5" r="1.5"/><circle cx="15.5" cy="15.5" r="1.5"/>',
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   tools: '<path d="M22.7 19 13.6 9.9a5.5 5.5 0 0 0-1.3-5.9 5.4 5.4 0 0 0-5.3-1.3L10.4 6 9 9l-3 1.4-3.4-3.4a5.4 5.4 0 0 0 1.3 5.3 5.5 5.5 0 0 0 5.9 1.3L19 22.7 22.7 19Z"/>',
-  image: '<path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5Z"/>'
+  image: '<path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5Z"/>',
+  music: '<path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6Z"/>',
+  play: '<path d="M8 5v14l11-7L8 5Z"/>',
+  pause: '<path d="M6 19h4V5H6v14Zm8-14v14h4V5h-4Z"/>',
+  skipNext: '<path d="M6 18l8.5-6L6 6v12ZM16 6v12h2V6h-2Z"/>',
+  skipPrev: '<path d="M6 6h2v12H6V6Zm3.5 6 8.5 6V6l-8.5 6Z"/>'
 }
 
 export function icon(name, size = 20) {

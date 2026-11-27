@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "start": "node scripts/ensure-key.js && electron .",
-    "test": "node --test --test-concurrency=2 --test-timeout=180000 test/core.test.js test/content.test.js test/update.test.js test/relay.test.js test/tunnel.test.js test/rooms.test.js test/afk.test.js test/tools.test.js",
+    "test": "node --test --test-concurrency=2 --test-timeout=180000 test/core.test.js test/content.test.js test/update.test.js test/relay.test.js test/tunnel.test.js test/rooms.test.js test/afk.test.js test/tools.test.js test/music.test.js",
     "test:e2e": "node test/e2e.js",
     "test:e2e2": "node test/e2e2.js",
     "dist:win": "node scripts/build.js win",

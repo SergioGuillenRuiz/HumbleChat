@@ -1,7 +1,6 @@
 // Utilidades de la llamada: ruleta, equipos, cara o cruz, dado y orden aleatorio.
 // Quien pulsa calcula el resultado una vez (toolslogic.js) y se lo manda a los demás de la llamada: todos ven lo mismo, con la misma animación.
 import { h } from '../util.js'
-import { icon } from '../icons.js'
 import { state } from '../state.js'
 import { utilBus, sendToCall } from '../voice.js'
 import { layer, toast, openContextMenu } from './overlays.js'

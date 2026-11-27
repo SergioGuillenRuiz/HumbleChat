@@ -6,6 +6,7 @@ import { voice, isMuted } from '../voice.js'
 import { openVolumeMenu } from './overlays.js'
 import { openProfile } from './popout.js'
 import { openToolsMenu } from './tools.js'
+import { toggleMusic, musicInfo } from './music.js'
 
 let root
 let video = null
@@ -13,7 +14,7 @@ const camEls = new Map() // id -> <video> de cámara, reutilizados entre renders
 
 export function mountVoiceView(el) {
   root = el
-  for (const evt of ['members', 'voice', 'streams', 'view', 'toggleMembers']) bus.on(evt, render)
+  for (const evt of ['members', 'voice', 'streams', 'view', 'toggleMembers', 'music']) bus.on(evt, render)
   bus.on('speaking', applySpeaking)
 }
 
@@ -101,11 +102,15 @@ export function render() {
 function controls() {
   const v = state.voice
   const muted = isMuted()
+  const mu = musicInfo()
   return [
     h('button.round' + (muted ? '.off' : ''), { tip: muted ? 'Activar micrófono (Ctrl+Mayús+M)' : 'Silenciar (Ctrl+Mayús+M)', onclick: () => voice.toggleMute() }, icon(muted ? 'micOff' : 'mic', 24)),
     h('button.round' + (v.deafened ? '.off' : ''), { tip: v.deafened ? 'Dejar de ensordecer (Ctrl+Mayús+D)' : 'Ensordecer (Ctrl+Mayús+D)', onclick: () => voice.toggleDeafen() }, icon(v.deafened ? 'headphonesOff' : 'headphones', 24)),
     h('button.round' + (v.cam ? '.on' : ''), { tip: v.cam ? 'Apagar cámara' : 'Encender cámara', onclick: () => voice.toggleCamera() }, icon(v.cam ? 'camera' : 'cameraOff', 24)),
     h('button.round' + (v.sharing ? '.on' : ''), { tip: v.sharing ? 'Dejar de compartir pantalla' : 'Compartir pantalla', onclick: () => (v.sharing ? voice.stopShare() : voice.startShare()) }, icon('screen', 24)),
+    h('button.round' + (mu.listening ? '.on' : '') + (mu.ping ? '.ping' : ''), {
+      tip: mu.ping ? 'Hay música sonando: pulsa para escucharla juntos' : mu.listening ? 'Escuchando música juntos' : 'Escuchar música juntos (YouTube)', dataset: { music: '1' }, onclick: toggleMusic
+    }, icon('music', 24)),
     h('button.round', { tip: 'Utilidades: ruleta, equipos, cara o cruz…', dataset: { tools: '1' }, onclick: (e) => openToolsMenu(e.currentTarget, v.ch) }, icon('dice', 24)),
     h('button.round.hang', { tip: 'Desconectar', onclick: () => voice.leave() }, icon('hangup', 24))
   ]

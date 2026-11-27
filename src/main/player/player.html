@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Reproductor</title>
+  <!-- Ventana oculta y aislada: sin acceso a nada de la aplicación. Solo se permite cargar el reproductor de YouTube. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://www.youtube.com https://s.ytimg.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; style-src 'unsafe-inline'; img-src data:">
+</head>
+<body style="margin:0;background:#000">
+  <div id="p"></div>
+  <script src="player.js"></script>
+</body>
+</html>
