@@ -5,6 +5,7 @@ import { state, bus, channel } from '../state.js'
 import { voice, isMuted } from '../voice.js'
 import { openVolumeMenu } from './overlays.js'
 import { openProfile } from './popout.js'
+import { openToolsMenu } from './tools.js'
 
 let root
 let video = null
@@ -88,7 +89,7 @@ export function render() {
 
   fill(root,
     h('div.header', icon('speaker', 24), h('span.h-title', c.name),
-      h('div.h-tools', h('button.icon-btn' + (state.showMembers ? '.active' : ''), {
+      h('div.h-tools', h('button.icon-btn', { tip: 'Utilidades: ruleta, equipos, cara o cruz…', tipPos: 'bottom', dataset: { tools: '1' }, onclick: (e) => openToolsMenu(e.currentTarget, c.id) }, icon('tools', 24)), h('button.icon-btn' + (state.showMembers ? '.active' : ''), {
         tip: state.showMembers ? 'Ocultar lista de miembros' : 'Mostrar lista de miembros', tipPos: 'bottom',
         onclick: () => bus.emit('toggleMembersClick')
       }, icon('people', 24)))),
@@ -105,6 +106,7 @@ function controls() {
     h('button.round' + (v.deafened ? '.off' : ''), { tip: v.deafened ? 'Dejar de ensordecer (Ctrl+Mayús+D)' : 'Ensordecer (Ctrl+Mayús+D)', onclick: () => voice.toggleDeafen() }, icon(v.deafened ? 'headphonesOff' : 'headphones', 24)),
     h('button.round' + (v.cam ? '.on' : ''), { tip: v.cam ? 'Apagar cámara' : 'Encender cámara', onclick: () => voice.toggleCamera() }, icon(v.cam ? 'camera' : 'cameraOff', 24)),
     h('button.round' + (v.sharing ? '.on' : ''), { tip: v.sharing ? 'Dejar de compartir pantalla' : 'Compartir pantalla', onclick: () => (v.sharing ? voice.stopShare() : voice.startShare()) }, icon('screen', 24)),
+    h('button.round', { tip: 'Utilidades: ruleta, equipos, cara o cruz…', dataset: { tools: '1' }, onclick: (e) => openToolsMenu(e.currentTarget, v.ch) }, icon('dice', 24)),
     h('button.round.hang', { tip: 'Desconectar', onclick: () => voice.leave() }, icon('hangup', 24))
   ]
 }

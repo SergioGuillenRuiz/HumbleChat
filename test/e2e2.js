@@ -321,6 +321,84 @@ async function sistema() {
   }
 }
 
+/** Utilidades de la llamada: el resultado lo calcula quien pulsa y lo ven igual todos los de la llamada. */
+async function utilidades() {
+  const net = await startNet()
+  const apps = []
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  const abrir = async (p, item) => { await p.page.locator('.vcontrols [data-tools="1"]').click(); await p.page.locator('.ctx-item', { hasText: item }).click() }
+  const resultado = async (p, kind) => {
+    await p.page.locator(`.util-result[data-kind="${kind}"][data-done="1"]`).waitFor({ timeout: 15000 })
+    return p.page.locator('.util-result').getAttribute('data-result')
+  }
+  const cerrar = (p) => p.page.locator('.util-result .btn.brand').click()
+  try {
+    console.log('Utilidades de la llamada')
+    const a = await launch(net, 'Ana'); apps.push(a)
+    const b = await launch(net, 'Beto'); apps.push(b)
+    for (const p of [a, b]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 2, 25000, 'se ven')
+    for (const p of [a, b]) await p.page.locator('.vch .ch', { hasText: 'General' }).click()
+    for (const p of [a, b]) await waitFor(async () => (await count(p, '.vuser')) === 2 && (await count(p, '.callpanel')) === 1, 20000, 'los dos en la llamada')
+
+    // Ruleta con una opción añadida a mano
+    await abrir(a, 'Ruleta')
+    const chips = await a.page.locator('.modal .chip').allTextContents()
+    if (chips.length !== 2 || !chips.includes('Ana') || !chips.includes('Beto')) throw new Error('la ruleta debería traer un hueco por cada persona de la llamada: ' + chips)
+    await a.page.fill('.modal input.text', 'Pizza'); await a.page.keyboard.press('Enter')
+    if ((await a.page.locator('.modal .chip').count()) !== 3) throw new Error('no se añadió la opción a mano')
+    await a.page.locator('[data-go="wheel"]').click()
+    const [ra, rb] = [await resultado(a, 'wheel'), await resultado(b, 'wheel')]
+    if (ra !== rb) throw new Error(`la ruleta no cae igual para todos: ${ra} / ${rb}`)
+    if (!['Ana', 'Beto', 'Pizza'].includes(ra)) throw new Error('ganador desconocido: ' + ra)
+    ok(`ruleta: un hueco por persona de la llamada y una opción propia; a los dos les cae en «${ra}»`)
+    await cerrar(a); await cerrar(b)
+
+    // Con una sola opción no gira
+    await abrir(a, 'Ruleta')
+    await a.page.locator('.modal .chip', { hasText: 'Beto' }).click()
+    await a.page.locator('[data-go="wheel"]').click()
+    await a.page.locator('.toast', { hasText: 'al menos 2' }).waitFor({ timeout: 5000 })
+    await a.page.keyboard.press('Escape')
+    ok('con menos de 2 opciones avisa en vez de girar')
+
+    // Equipos
+    await abrir(a, 'Equipos')
+    await a.page.locator('[data-go="teams"]').click()
+    const [ta, tb] = [await resultado(a, 'teams'), await resultado(b, 'teams')]
+    if (ta !== tb) throw new Error('los equipos no coinciden: ' + ta + ' / ' + tb)
+    if (ta.split('|').length !== 2 || !['Ana|Beto', 'Beto|Ana'].includes(ta)) throw new Error('equipos inesperados: ' + ta)
+    ok('equipos aleatorios: dos equipos con una persona cada uno, iguales para los dos')
+    await cerrar(a); await cerrar(b)
+
+    // Cara o cruz
+    await abrir(b, 'Cara o cruz') // lo lanza Beto: también funciona al revés
+    const [ca, cb] = [await resultado(b, 'coin'), await resultado(a, 'coin')]
+    if (ca !== cb || !['cara', 'cruz'].includes(ca)) throw new Error('moneda: ' + ca + ' / ' + cb)
+    ok(`cara o cruz lanzado por Beto: los dos ven «${ca}»`)
+    await cerrar(a); await cerrar(b)
+
+    // Dado y orden
+    await abrir(a, 'Dado')
+    await a.page.selectOption('.modal select >> nth=0', '20'); await a.page.selectOption('.modal select >> nth=1', '3')
+    await a.page.locator('[data-go="dice"]').click()
+    const [da, db] = [await resultado(a, 'dice'), await resultado(b, 'dice')]
+    if (da !== db || da.split(',').length !== 3 || da.split(',').some((x) => +x < 1 || +x > 20)) throw new Error('dado: ' + da + ' / ' + db)
+    ok(`dado: 3 dados de 20 caras, iguales para los dos (${da})`)
+    await cerrar(a); await cerrar(b)
+    await abrir(a, 'Orden')
+    await a.page.locator('[data-go="order"]').click()
+    const [oa, ob] = [await resultado(a, 'order'), await resultado(b, 'order')]
+    if (oa !== ob || !['Ana>Beto', 'Beto>Ana'].includes(oa)) throw new Error('orden: ' + oa + ' / ' + ob)
+    ok('orden aleatorio: igual para los dos')
+  } catch (e) {
+    await capturarFallo('e2e2-utilidades')
+    throw e
+  } finally {
+    await close()
+    await net.testnet.destroy().catch(() => {})
+  }
+}
+
 /** Inactividad en una llamada, con la aplicación real y tiempos cortos (el sistema "lleva horas inactivo" por HUMBLECHAT_FAKE_IDLE). */
 async function afk() {
   const net = await startNet()
@@ -537,6 +615,7 @@ async function tunel() {
   if (!only || only === 'tunel') await tunel()
   if (!only || only === 'salas') await salas()
   if (!only || only === 'afk') await afk()
+  if (!only || only === 'utilidades') await utilidades()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })

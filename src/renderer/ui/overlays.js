@@ -13,7 +13,7 @@ export function toast(text, kind = 'info', ms = 5000) {
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 250) }, ms)
 }
 
-function layer(cls) {
+export function layer(cls) {
   const el = h('div.layer.' + cls)
   document.body.append(el)
   const close = () => { el.remove(); document.removeEventListener('keydown', onKey, true) }

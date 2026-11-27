@@ -27,6 +27,7 @@ if (!quick) {
     steps.push({ name: 'Voz y cámara por el túnel P2P', cmd: ['node', 'test/e2e2.js', 'tunel'], gui: true })
     steps.push({ name: 'Varias salas', cmd: ['node', 'test/e2e2.js', 'salas'], gui: true })
     steps.push({ name: 'Inactividad en llamada', cmd: ['node', 'test/e2e2.js', 'afk'], gui: true })
+    steps.push({ name: 'Utilidades de la llamada', cmd: ['node', 'test/e2e2.js', 'utilidades'], gui: true })
   }
 }
 

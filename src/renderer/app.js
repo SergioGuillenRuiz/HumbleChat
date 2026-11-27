@@ -6,6 +6,7 @@ import { mountChat, showChannel, onEvents as onEventsChat, touchRead } from './u
 import { mountMembers } from './ui/members.js'
 import { mountRail } from './ui/rail.js'
 import { startAfk } from './afk.js'
+import { mountTools } from './ui/tools.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
 import { voice } from './voice.js'
 import { toast, setVoiceApi } from './ui/overlays.js'
@@ -98,6 +99,7 @@ async function boot() {
 
   window.humble.onMessage(onMessage)
   startAfk()
+  mountTools()
   onView()
   bus.emit('unread')
   if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)
