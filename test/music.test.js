@@ -386,3 +386,15 @@ test('el proceso principal solo acepta órdenes y eventos con la forma exacta', 
   assert.equal(cleanEvent({ e: 'state', st: 'playing', pos: Infinity }).pos, 0)
   for (const bad of [null, {}, { e: 'otro' }, 'x']) assert.equal(cleanEvent(bad), null)
 })
+
+test('el estado más grande posible cabe holgado en el límite de 64 KB de una señal', async () => {
+  const m = await load()
+  const lleno = {
+    rev: 999999999, by: A, i: 49, play: true, pos: 86400,
+    q: Array.from({ length: 50 }, (_, k) => ({ v: V1, n: 'z'.repeat(24 - String(k).length) + k, t: 'ñ'.repeat(120), a: 'á'.repeat(60), by: B }))
+  }
+  const s = m.validateState(lleno)
+  assert.ok(s, 'el estado máximo es válido')
+  const tam = JSON.stringify({ k: 'mus', d: { t: 'st', s } }).length
+  assert.ok(tam < 32 * 1024, 'ocupa ' + tam + ' caracteres')
+})
