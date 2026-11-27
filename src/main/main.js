@@ -379,7 +379,7 @@ function setupIpc() {
   handle('setVoice', (_e, v) => node.setVoice(v))
   handle('signal', (_e, to, data) => node.signal(to, data))
   // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
-  handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null))
+  handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null)) // devuelve [{ address, port }]
   handle('tunnel:close', (_e, id) => { if (typeof id === 'string') tunnels?.close(id) })
   handle('tunnel:stats', (_e, id) => (typeof id === 'string' ? tunnels?.stats(id) ?? null : null))
   handle('addBlob', (_e, { data, name, mime, w, ht }) => {
