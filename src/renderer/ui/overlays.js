@@ -330,6 +330,17 @@ async function squareAvatar(file) {
   return await blob.arrayBuffer()
 }
 
+/** Fila con un interruptor ligado a un ajuste de la aplicación (settings.json). */
+function settingSwitch(label, help, key) {
+  const on = () => state.settings[key] !== false
+  const btn = h('button.switch' + (on() ? '.on' : ''), { role: 'switch', 'aria-checked': String(on()), onclick: async () => {
+    state.settings = await window.humble.setSettings({ [key]: !on() })
+    btn.classList.toggle('on', on())
+    btn.setAttribute('aria-checked', String(on()))
+  } }, h('span.knob'))
+  return h('div.sw-row', h('div', h('div.sw-label', label), h('div.muted', help)), btn)
+}
+
 export function openSettings(voice, startTab = 'account') {
   const { el, close } = layer('settings')
   let tab = startTab
@@ -546,7 +557,10 @@ export function openSettings(voice, startTab = 'account') {
         h('div.row', pttBtn, pttSw)),
       h('label.field', 'Cámara', camSel),
       camBox,
-      h('p.muted', 'Cancelación de eco y control automático de ganancia: activados.'))
+      h('p.muted', 'Cancelación de eco y control automático de ganancia: activados.'),
+      h('h3.sub', 'Inactividad en una llamada'),
+      settingSwitch('Silenciar tras 30 minutos sin actividad', 'Si no tocas el ordenador ni hablas durante 30 minutos, se silencia tu micrófono. Al volver, lo activas tú.', 'afkMute'),
+      settingSwitch('Salir de la llamada tras 1 hora sin actividad', 'Te avisa 5 minutos antes. Solo actúa si el sistema puede saber que de verdad llevas una hora sin tocar nada.', 'afkLeave'))
   }
 
   function notif() {

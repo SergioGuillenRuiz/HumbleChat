@@ -7,7 +7,7 @@ pkgrel=1
 pkgdesc='Chat de texto, voz y vídeo para grupos pequeños de amigos, sin servidor ni cuentas (P2P)'
 arch=('x86_64')
 url='https://github.com/SergioGuillenRuiz/HumbleChat'
-license=('MIT')
+license=('custom')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libnotify' 'libxtst' 'libxkbcommon-x11' 'xdg-utils')
 makedepends=('git' 'nodejs' 'npm')
 optdepends=('xdg-desktop-portal: compartir pantalla en Wayland' 'pipewire: audio y captura de pantalla en Wayland')
@@ -35,7 +35,6 @@ package() {
   chmod 4755 "$pkgdir/opt/humblechat/chrome-sandbox" # sandbox SUID de Electron
   ln -s /opt/humblechat/humblechat "$pkgdir/usr/bin/humblechat"
   install -Dm644 build/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/humblechat.png"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/humblechat.desktop" <<DESKTOP
 [Desktop Entry]
 Name=HumbleChat

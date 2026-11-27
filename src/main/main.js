@@ -11,6 +11,7 @@ const { startUpdates } = require('./updates')
 const { UdpTunnels } = require('./udptunnel')
 const { RoomStore } = require('./rooms')
 const { RoomHub } = require('./roomhub')
+const { osIdleSeconds } = require('./idle')
 const { trayHostAvailable, createTray } = require('./tray')
 const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
@@ -452,6 +453,7 @@ function setupIpc() {
     ...node.diagnostics()
   }))
   handle('openExternal', (_e, url) => openExternal(url))
+  handle('idle:get', () => osIdleSeconds({ powerMonitor, wayland: IS_WAYLAND, platform: process.platform }))
 
   // ── Salas ──
   const BAD_CODE = 'Ese código no es válido. Tiene que ser el que te pasó tu amigo (64 letras y números).'

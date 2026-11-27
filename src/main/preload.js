@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('humble', {
   roomInfo: call('room:info'),
   roomJoin: call('room:join'),
   roomCreate: call('room:create'),
+  idleSeconds: call('idle:get'),
   roomsList: call('rooms:list'),
   roomsAdd: call('rooms:add'),
   roomsSwitch: call('rooms:switch'),

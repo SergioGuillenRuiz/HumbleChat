@@ -5,6 +5,7 @@ import { mountSidebar, openChannel } from './ui/sidebar.js'
 import { mountChat, showChannel, onEvents as onEventsChat, touchRead } from './ui/chat.js'
 import { mountMembers } from './ui/members.js'
 import { mountRail } from './ui/rail.js'
+import { startAfk } from './afk.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
 import { voice } from './voice.js'
 import { toast, setVoiceApi } from './ui/overlays.js'
@@ -96,6 +97,7 @@ async function boot() {
   document.addEventListener('contextmenu', (e) => { if (!e.target.closest('textarea,input')) e.preventDefault() })
 
   window.humble.onMessage(onMessage)
+  startAfk()
   onView()
   bus.emit('unread')
   if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)

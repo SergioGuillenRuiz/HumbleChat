@@ -321,6 +321,65 @@ async function sistema() {
   }
 }
 
+/** Inactividad en una llamada, con la aplicación real y tiempos cortos (el sistema "lleva horas inactivo" por HUMBLECHAT_FAKE_IDLE). */
+async function afk() {
+  const net = await startNet()
+  const apps = []
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  const tiempos = { muteMs: 2500, leaveMs: 7000, warnMs: 2500, tickMs: 250, ignoreSpeech: true, backMs: 1500 }
+  const entrar = (p) => p.page.locator('.vch .ch', { hasText: 'General' }).click()
+  const enLlamada = (p) => p.page.locator('.callpanel').count().then((n) => n > 0)
+  const silenciado = (p) => p.page.locator('.round[aria-label^="Activar micrófono"]').count().then((n) => n > 0)
+  try {
+    console.log('Inactividad en una llamada (AFK)')
+    // 1. El sistema lleva horas sin actividad: primero se silencia, luego avisa y por fin sale de la llamada
+    let a = await launch(net, 'Ana', { env: { HUMBLECHAT_FAKE_IDLE: '99999' } }); apps.push(a)
+    await a.page.evaluate((t) => localStorage.setItem('hc.dbg', JSON.stringify({ afk: t })), tiempos)
+    await a.page.reload(); await a.page.waitForSelector('.sb-header')
+    await entrar(a)
+    await waitFor(() => enLlamada(a), 10000, 'Ana entra en la llamada')
+    if (await silenciado(a)) throw new Error('no debería entrar silenciada')
+    await waitFor(() => silenciado(a), 15000, 'se silencia por inactividad')
+    if (!(await enLlamada(a))) throw new Error('al silenciar no debe salir de la llamada')
+    ok('con el sistema inactivo, a los 30 min (aquí 2,5 s) se silencia y sigue en la llamada')
+    await waitFor(async () => (await a.page.locator('.toast', { hasText: 'saldrás de la llamada' }).count()) > 0, 15000, 'aviso antes de salir')
+    ok('avisa antes de sacarte de la llamada')
+    await waitFor(async () => !(await enLlamada(a)), 20000, 'sale de la llamada')
+    await waitFor(async () => (await a.page.locator('.toast', { hasText: 'Has salido de la llamada' }).count()) > 0, 5000, 'aviso de que salió')
+    ok('a la hora (aquí 7 s) sin actividad sale de la llamada y se lo dice')
+    await close()
+
+    // 2. El sistema está activo (el usuario hace otras cosas): no se silencia ni se le echa, aunque la ventana esté quieta
+    a = await launch(net, 'Ana', { env: { HUMBLECHAT_FAKE_IDLE: '0' } }); apps.push(a)
+    await a.page.evaluate((t) => localStorage.setItem('hc.dbg', JSON.stringify({ afk: t })), tiempos)
+    await a.page.reload(); await a.page.waitForSelector('.sb-header')
+    await entrar(a)
+    await waitFor(() => enLlamada(a), 10000, 'Ana entra en la llamada')
+    await sleep(tiempos.leaveMs + 4000)
+    if (!(await enLlamada(a))) throw new Error('con el sistema activo no se debe salir de la llamada')
+    if (await silenciado(a)) throw new Error('con el sistema activo no se debe silenciar')
+    ok('si el sistema está en uso (juegas o trabajas en otra ventana), no se silencia ni se te echa')
+    await close()
+
+    // 3. Sin poder saber la actividad del sistema (null): se puede silenciar pero nunca echar
+    a = await launch(net, 'Ana', { env: { HUMBLECHAT_FAKE_IDLE: 'no-se' } }); apps.push(a)
+    await a.page.evaluate((t) => localStorage.setItem('hc.dbg', JSON.stringify({ afk: { ...t, ignoreInput: false } })), tiempos)
+    await a.page.reload(); await a.page.waitForSelector('.sb-header')
+    await entrar(a)
+    await waitFor(() => enLlamada(a), 10000, 'Ana entra en la llamada')
+    await waitFor(() => silenciado(a), 15000, 'se silencia aunque no se sepa lo del sistema')
+    await sleep(tiempos.leaveMs + 4000)
+    if (!(await enLlamada(a))) throw new Error('sin saber lo del sistema no se debe echar a nadie')
+    ok('si el escritorio no dice cuánto lleva inactivo, se silencia pero nunca se echa de la llamada')
+  } catch (e) {
+    await capturarFallo('e2e2-afk')
+    throw e
+  } finally {
+    await close()
+    await net.testnet.destroy().catch(() => {})
+  }
+}
+
 /** Varias salas a la vez, cada una con su historial. */
 async function salas() {
   const net = await startNet()
@@ -477,6 +536,7 @@ async function tunel() {
   if (!only || only === 'sistema') await sistema()
   if (!only || only === 'tunel') await tunel()
   if (!only || only === 'salas') await salas()
+  if (!only || only === 'afk') await afk()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })

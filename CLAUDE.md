@@ -15,7 +15,7 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 | `npm run lint` | ESLint (0 errores exigidos; los avisos no bloquean) |
 | `npm run report` | Diagnóstico de un clic (NAT, audio, cámaras). Útil para pegar o ejecutar en el PC real |
 | `npm test` | Pruebas unitarias del núcleo y del contenido (`test/core.test.js`, `test/content.test.js`) |
-| `node test/e2e2.js contenido\|sistema\|tunel\|salas` | Un solo bloque de e2e2 (`tunel` y `salas` también corren en Windows) |
+| `node test/e2e2.js contenido\|sistema\|tunel\|salas\|afk` | Un solo bloque de e2e2 (`tunel`, `salas` y `afk` también corren en Windows) |
 | `npm run test:smoke` / `test:e2e` / `test:e2e2` | Pruebas con Electron real (en Linux sin pantalla: `xvfb-run -a -s "-screen 0 1920x1080x24" <cmd>`; `verify` lo hace solo) |
 | `npm run test:netsim [filtro]` | Red simulada (solo Linux con root; `apt install iproute2 nftables coturn xvfb`): cada cliente en su espacio de red tras NAT cono/simétrico/CGNAT, con coturn y DHT propios. En CI es el trabajo «Red simulada» |
 | `npm run test:gate` | Bloqueo por versión obsoleta con Electron real (servidor local que hace de «GitHub»). También se ejecuta sobre la app empaquetada en CI |
@@ -32,7 +32,7 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 ## Arquitectura
 - `src/core/`: P2P, sin dependencias de Electron (node.js, store.js, dmcrypto.js, frames.js, sign.js…). Probado con `test/core.test.js`.
 - `src/main/`: proceso principal Electron (main, preload, tray, updates, ptt, settings). **Salas**: `rooms.js` (registro `rooms.json`, sin Electron) y `roomhub.js` (un `ChatNode` por sala, todos conectados a la vez; la UI muestra la activa y las demás solo cuentan no leídos). Cada sala tiene su historial en `rooms/<huella>/`; la sala anterior a las salas múltiples conserva `data/` (sin moverla) y la identidad (`data/identity.json`, `avatar.bin`) es una sola. Con `HUMBLECHAT_KEY` hay una sala fijada y `rooms.json` no se usa (las pruebas lo usan). Probado en `test/rooms.test.js` y `test/e2e2.js salas`.
-- `src/renderer/`: interfaz (voice.js, ui/*, app.js). WebRTC para voz/vídeo.
+- `src/renderer/`: interfaz (voice.js, ui/*, app.js). WebRTC para voz/vídeo. **AFK**: `afklogic.js` (pura, probada en `test/afk.test.js`), `afk.js` (mide actividad: sistema por `src/main/idle.js`, hablar y usar la ventana) — 30 min sin actividad silencia, 1 h sale de la llamada y solo si el sistema sabe de verdad lo que lleva inactivo (en Wayland, solo GNOME por D-Bus; si no, null y no se echa a nadie). Simulación en pruebas: `HUMBLECHAT_FAKE_IDLE` y `hc.dbg` `afk:{muteMs,leaveMs,warnMs,tickMs,ignoreSpeech}`.
 - `electron-builder.config.js`, `scripts/build.js`, `.github/workflows/release.yml`: empaquetado y release (etiqueta `v*`).
 
 ## Diagnóstico de fallos de CI

@@ -1,6 +1,6 @@
 # HumbleChat
 
-Chat de texto, voz y vídeo para un grupo de amigos. Sin cuentas, sin contraseñas y sin servidor propio: las aplicaciones se encuentran y se conectan directamente entre sí. Windows y Linux. Código abierto (MIT).
+Chat de texto, voz y vídeo para un grupo de amigos. Sin cuentas, sin contraseñas y sin servidor propio: las aplicaciones se encuentran y se conectan directamente entre sí. Windows y Linux.
 
 ## Qué puedes hacer
 
@@ -116,7 +116,3 @@ npm run dist:public  # instaladores sin llave de sala, para publicar
 ```
 
 `npm run dist:all` compila Linux y Windows (`dist:win` hay que ejecutarlo desde Windows) e incluye dentro la llave de la sala (`group.key`): es para uso privado, no lo publiques. Las versiones se publican con el flujo «Nueva versión» de GitHub Actions.
-
-## Licencia
-
-MIT. Consulta [LICENSE](LICENSE).
