@@ -508,7 +508,7 @@ export function openSettings(voice, startTab = 'account') {
       const input = h('input.text', { placeholder: 'Pega aquí otro código de sala', spellcheck: false })
       const join = h('button.btn.brand', { onclick: () => changeRoom(input.value) }, 'Cambiar')
       const locked = info.envKey ? h('p.muted', 'La sala está fijada por la variable HUMBLECHAT_KEY y no se puede cambiar desde aquí.') : null
-      box.replaceChildren(
+      box.replaceChildren(...[
         h('h2', 'Sala'),
         h('p.muted', 'La sala es el grupo de amigos al que te conectas. Quien tenga el código puede entrar.'),
         h('div.field', h('div.label', 'Huella de la sala'), h('div.fp', info.fingerprint), h('p.muted', 'Si tus amigos ven la misma huella, estáis en la misma sala.')),
@@ -516,7 +516,8 @@ export function openSettings(voice, startTab = 'account') {
         locked,
         !info.envKey && h('label.field', 'Cambiar de sala', h('div.row', input, join)),
         !info.envKey && h('div.field', h('button.btn.secondary', { onclick: createRoom }, 'Crear una sala nueva'),
-          h('p.muted', 'Útil si un amigo ya no debe entrar: con una sala nueva solo entran quienes reciban el código nuevo. Tu historial se conserva en este equipo.')))
+          h('p.muted', 'Útil si un amigo ya no debe entrar: con una sala nueva solo entran quienes reciban el código nuevo. Tu historial se conserva en este equipo.'))
+      ].filter(Boolean)) // sin esto, un null (sala fijada por variable de entorno ausente) se dibujaba como el texto «null»
     })()
     async function changeRoom(text) {
       if (!text.trim()) return
