@@ -7,7 +7,9 @@ const DEFAULTS = {
   tray: true, // al cerrar la ventana, seguir en la bandeja (si el sistema tiene bandeja)
   autostart: false, // iniciar con el sistema
   latestSeen: '', // la última versión publicada que se llegó a ver (para bloquear una versión vieja aunque no haya conexión)
-  linkPreviews: true // crear vistas previas de los enlaces que envío
+  linkPreviews: true, // crear vistas previas de los enlaces que envío
+  afkMute: true, // en una llamada, silenciar el micrófono tras 30 min de inactividad
+  afkLeave: true // y salir de la llamada tras 1 h
 }
 
 function createSettings(dir) {

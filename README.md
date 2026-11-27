@@ -1,6 +1,6 @@
 # HumbleChat
 
-Chat de texto, voz y vídeo para un grupo de amigos. Sin cuentas, sin contraseñas y sin servidor propio: las aplicaciones se encuentran y se conectan directamente entre sí. Windows y Linux. Código abierto (MIT).
+Chat de texto, voz y vídeo para un grupo de amigos. Sin cuentas, sin contraseñas y sin servidor propio: las aplicaciones se encuentran y se conectan directamente entre sí. Windows y Linux.
 
 ## Qué puedes hacer
 
@@ -8,6 +8,9 @@ Chat de texto, voz y vídeo para un grupo de amigos. Sin cuentas, sin contraseñ
 - **Canales de texto y de voz** que se crean, renombran y borran. Formato (negrita, cursiva, código), respuestas, ediciones, reacciones, menciones, mensajes fijados, búsqueda y vistas previas de enlaces.
 - **Mensajes directos cifrados**, archivos de hasta 64 MB y avatares.
 - **Voz, cámara y pantalla compartida** en buena calidad, con supresión de ruido, umbral de sensibilidad y pulsar para hablar con tecla global.
+- **Música juntos**: pega el enlace de un vídeo de YouTube y suena a la vez para todos los que quieran escuchar, con cola compartida, pausa, avance y volumen propio.
+- **Utilidades en la llamada**: ruleta con los miembros de la llamada, equipos aleatorios, cara o cruz, dado y orden aleatorio. El resultado es el mismo para todos.
+- **Inactividad**: en una llamada, a los 30 minutos sin tocar nada se silencia tu micrófono y a la hora se sale de la llamada (se puede desactivar en Ajustes).
 - **Comodidades de escritorio**: bandeja del sistema, inicio automático, aviso de mensajes sin leer y actualizaciones automáticas.
 
 ## Instalación
@@ -39,6 +42,8 @@ Para saberlo solo consulta la lista pública de versiones del proyecto; no enví
 
 - **Salas**: la barra de la izquierda tiene una por sala. Pulsa el «+» para unirte con un código o crear una nueva. Con el botón derecho sobre una sala puedes copiar su código, renombrarla (el nombre solo lo ves tú) o salir de ella, con la opción de borrar su historial de tu equipo.
 - **Texto y voz**: elige un canal con `#` para escribir o uno con altavoz para hablar. Abajo a la izquierda están el micrófono, los auriculares y los ajustes; durante una llamada, también la cámara, la pantalla y colgar. Si cambias de sala estando en una llamada, te pregunta antes, porque saldrás de ella.
+- **Música**: en una llamada, el botón de la nota (junto a compartir pantalla) abre «Escuchar juntos». Pega un enlace de YouTube y se añade a la cola; cualquiera de la llamada puede añadir, pausar, saltar o quitar canciones. A quien llega se le avisa de que hay música, pero solo la oye si pulsa «Escuchar juntos». Ensordecerte la silencia.
+- **Utilidades**: el botón del dado (o la llave en la cabecera del canal de voz) abre ruleta, equipos, cara o cruz, dado y orden aleatorio. La ruleta y los equipos traen ya a las personas de la llamada; puedes quitar a alguien o añadir opciones.
 - **En privado**: pulsa el nombre de un amigo y «Enviar mensaje».
 - **Si algo falla**: Ajustes, Diagnóstico muestra el estado de la red y de la llamada, y cómo se está conectando cada amigo. Es lo que hay que enseñar para que te ayuden.
 
@@ -66,6 +71,7 @@ La mayoría de los chats funcionan con un **servidor central**: tus mensajes, tu
 - **Quién eres.** Al instalar, la aplicación crea una identidad: una clave secreta que solo existe en tu equipo (no hay cuentas ni contraseñas). Cada mensaje que escribes lleva tu firma, así nadie puede hacerse pasar por ti ni cambiar lo que dijiste. Tu **ID** es la parte pública de esa clave; es la misma en todas tus salas.
 - **Cada sala, su mundo.** Cada sala tiene su propia conexión, sus amigos y su historial guardado aparte: lo de una sala nunca se mezcla ni se envía a otra, aunque estés en las dos a la vez.
 - **Llamadas.** La voz, la cámara y la pantalla viajan directamente de tu equipo al de tu amigo, sin pasar por ningún sitio, como una llamada sin central. Algunas redes (los datos del móvil o los routers muy estrictos) no dejan que dos equipos se conecten así; en ese caso la aplicación hace pasar la llamada por la misma conexión que ya usa el chat, y si tampoco es posible, otro amigo con mejor conexión hace de puente. Todo va cifrado por el camino; solo en este último caso, el amigo que hace de puente oye el audio que retransmite.
+- **Música.** Por la llamada no viaja audio de música: cada persona que decide escuchar reproduce su propia copia desde YouTube, y las aplicaciones se pasan entre sí un estado muy pequeño (qué canción, si suena, en qué segundo) para ir a la vez. El reproductor de YouTube se abre en una ventana aparte y oculta, sin acceso a nada de tu chat.
 - **Actualizaciones.** Cada versión nueva es obligatoria para que todos se entiendan; la aplicación la descarga sola de la página de versiones del proyecto.
 
 ### En qué se diferencia de un chat con servidor
@@ -99,6 +105,7 @@ Gratuitos, sin cuenta ni clave. Ninguno ve mensajes, audio ni vídeo. Hace falta
 | Servidores STUN de Google, Cloudflare y Twilio | Averiguar la dirección pública para las llamadas |
 | GitHub | Avisar de versiones nuevas y descargarlas |
 | Las páginas que enlazas | Solo quien envía el enlace visita la página, una vez, para la vista previa |
+| YouTube (solo si usas «Escuchar juntos») | Quien añade una canción consulta su título; quien escucha carga el reproductor de YouTube, que ve su dirección y qué vídeo es, pero no la sala ni la llamada |
 
 Para no depender de los públicos, `node scripts/own-node.js --host <IP pública>` en un equipo con IP pública genera un `network.json` (admite también un servidor TURN) que se coloca en la carpeta de datos de la aplicación.
 
@@ -116,7 +123,3 @@ npm run dist:public  # instaladores sin llave de sala, para publicar
 ```
 
 `npm run dist:all` compila Linux y Windows (`dist:win` hay que ejecutarlo desde Windows) e incluye dentro la llave de la sala (`group.key`): es para uso privado, no lo publiques. Las versiones se publican con el flujo «Nueva versión» de GitHub Actions.
-
-## Licencia
-
-MIT. Consulta [LICENSE](LICENSE).

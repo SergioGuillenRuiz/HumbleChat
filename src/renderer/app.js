@@ -5,8 +5,11 @@ import { mountSidebar, openChannel } from './ui/sidebar.js'
 import { mountChat, showChannel, onEvents as onEventsChat, touchRead } from './ui/chat.js'
 import { mountMembers } from './ui/members.js'
 import { mountRail } from './ui/rail.js'
+import { startAfk } from './afk.js'
+import { mountTools } from './ui/tools.js'
+import { mountMusic } from './ui/music.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
-import { voice } from './voice.js'
+import { voice, musicBus } from './voice.js'
 import { toast, setVoiceApi } from './ui/overlays.js'
 import { renderGate } from './ui/updategate.js'
 import { play } from './sounds.js'
@@ -96,6 +99,9 @@ async function boot() {
   document.addEventListener('contextmenu', (e) => { if (!e.target.closest('textarea,input')) e.preventDefault() })
 
   window.humble.onMessage(onMessage)
+  startAfk()
+  mountTools()
+  mountMusic()
   onView()
   bus.emit('unread')
   if (isFirstLaunch) setTimeout(() => toast(`Tus amigos te verán como «${state.me.name}». Puedes cambiarlo en Ajustes (⚙ abajo a la izquierda).`), 1500)
@@ -168,6 +174,7 @@ function onMessage(msg) {
       return bus.emit('unread')
     }
     case 'signal': return voice.onSignal(msg.from, msg.data)
+    case 'music': return musicBus.onPlayer?.(msg.evt) // el reproductor de «Escuchar juntos» cuenta su estado
     case 'toggleMute': return state.voice && voice.toggleMute()
     case 'ptt': return voice.setPtt(msg.down)
     case 'update': return showUpdate(msg)

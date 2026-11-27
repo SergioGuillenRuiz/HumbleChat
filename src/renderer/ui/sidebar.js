@@ -5,12 +5,13 @@ import { state, bus, member, markRead, channel } from '../state.js'
 import { voice, isMuted } from '../voice.js'
 import { openSettings, openVolumeMenu, openContextMenu, openInvite, openChannelModal, openRoomModal, confirmModal, toast } from './overlays.js'
 import { openProfile } from './popout.js'
+import { toggleMusic, musicInfo, musicMini } from './music.js'
 
 let root
 
 export function mountSidebar(el) {
   root = el
-  for (const evt of ['members', 'voice', 'unread', 'view', 'status', 'collapsed', 'channels', 'dms', 'rooms']) bus.on(evt, render)
+  for (const evt of ['members', 'voice', 'unread', 'view', 'status', 'collapsed', 'channels', 'dms', 'rooms', 'music']) bus.on(evt, render)
   bus.on('speaking', applySpeaking)
   render()
 }
@@ -186,6 +187,7 @@ const pingClass = (ms) => (ms == null || ms < 120 ? '' : ms < 250 ? '.warn' : '.
 function callPanel() {
   const c = state.channels.find((x) => x.id === state.voice.ch)
   const v = state.voice
+  const mu = musicInfo()
   return h('div.callpanel',
     h('div.cp-top',
       h('div.cp-info',
@@ -197,7 +199,11 @@ function callPanel() {
       h('button.cp-btn' + (v.cam ? '.on' : ''), { tip: v.cam ? 'Apagar cámara' : 'Encender cámara', onclick: () => voice.toggleCamera() }, icon(v.cam ? 'camera' : 'cameraOff', 18)),
       h('button.cp-btn' + (v.sharing ? '.on' : ''), {
         tip: v.sharing ? 'Dejar de compartir pantalla' : 'Compartir tu pantalla', onclick: () => (v.sharing ? voice.stopShare() : voice.startShare())
-      }, icon('screen', 18))))
+      }, icon('screen', 18)),
+      h('button.cp-btn' + (mu.listening ? '.on' : '') + (mu.ping ? '.ping' : ''), {
+        tip: mu.ping ? 'Hay música sonando: pulsa para escucharla juntos' : 'Escuchar música juntos (YouTube)', dataset: { music: '1' }, onclick: toggleMusic
+      }, icon('music', 18))),
+    musicMini())
 }
 
 function userPanel() {

@@ -11,6 +11,8 @@ const { startUpdates } = require('./updates')
 const { UdpTunnels } = require('./udptunnel')
 const { RoomStore } = require('./rooms')
 const { RoomHub } = require('./roomhub')
+const { osIdleSeconds } = require('./idle')
+const { createMusicPlayer } = require('./musicplayer')
 const { trayHostAvailable, createTray } = require('./tray')
 const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
@@ -57,6 +59,7 @@ process.on('unhandledRejection', (e) => console.error('[humblechat] unhandledRej
 
 let win = null
 let node = null
+let music = null // reproductor de «Escuchar juntos» (ventana oculta y aislada)
 const RELEASES_URL = (() => { // página de descargas del proyecto, para el aviso de invitar a un amigo
   const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(require('../../package.json').repository?.url || '')
   return m ? `https://github.com/${m[1]}/releases/latest` : null
@@ -296,7 +299,8 @@ function createWindow(page = 'index') {
       if (input.control && input.key.toLowerCase() === 'r') wc.reload()
     })
   }
-  wc.on('did-start-loading', () => { rendererReady = false })
+  wc.on('did-start-loading', () => { rendererReady = false; music?.close() }) // al recargar la interfaz se acaba la llamada, y con ella la música
+  win.on('closed', () => music?.close()) // sin esto, la ventana oculta del reproductor impediría que la aplicación se cierre
   win.loadURL(`humble://app/${page}.html?platform=${process.platform}`)
 }
 
@@ -412,7 +416,11 @@ function setupIpc() {
   handle('typing', (_e, ch) => node.typing(ch))
   handle('remove', (_e, id) => node.remove(id))
   handle('setName', (_e, name) => inAllRooms((n) => n.setName(name)))
-  handle('setVoice', (_e, v) => node.setVoice(v))
+  handle('setVoice', (_e, v) => { if (!v) music?.close(); return node.setVoice(v) }) // colgar apaga la música
+  // «Escuchar juntos»: el reproductor de YouTube vive en su propia ventana (ver musicplayer.js)
+  handle('music:meta', (_e, id) => music.meta(id))
+  handle('music:thumb', (_e, id) => music.thumb(id))
+  handle('music:cmd', (_e, cmd) => music.command(cmd))
   handle('signal', (_e, to, data) => node.signal(to, data))
   // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
   handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null)) // devuelve [{ address, port }]
@@ -452,6 +460,7 @@ function setupIpc() {
     ...node.diagnostics()
   }))
   handle('openExternal', (_e, url) => openExternal(url))
+  handle('idle:get', () => osIdleSeconds({ powerMonitor, wayland: IS_WAYLAND, platform: process.platform }))
 
   // ── Salas ──
   const BAD_CODE = 'Ese código no es válido. Tiene que ser el que te pasó tu amigo (64 letras y números).'
@@ -559,6 +568,7 @@ app.on('before-quit', (e) => {
   if (quitting || !hub?.all().length) return
   e.preventDefault()
   quitting = true
+  music?.dispose()
   updates?.stop()
   const done = () => app.exit(0)
   hub.stopAll().then(done, done)
@@ -572,6 +582,7 @@ app.whenReady().then(async () => {
   settings = createSettings(app.getPath('userData'))
   registerProtocol()
   setupSession()
+  music = createMusicPlayer({ fake: !!process.env.HUMBLECHAT_FAKE_MUSIC, onEvent: (evt) => send('music', { evt }) })
   setupIpc()
   updates = startUpdates({
     send,

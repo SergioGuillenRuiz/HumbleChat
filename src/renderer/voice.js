@@ -55,6 +55,14 @@ async function updateQuality() {
   bus.emit('voice')
 }
 
+/** Puentes para las funciones que viajan por las conexiones de la llamada (utilidades, música): voice.js solo reparte. */
+export const utilBus = { handler: null }
+export const musicBus = { handler: null, onLink: null, onPlayer: null }
+/** Manda un mensaje a todos los que están en la llamada. */
+export function sendToCall(msg) { for (const l of links.values()) l.send(msg) }
+/** Manda un mensaje a una persona de la llamada. */
+export function sendToPeer(id, msg) { links.get(id)?.send(msg) }
+
 export function isMuted() { return !!state.voice && (state.voice.muted || state.voice.deafened) }
 
 function publish() {
@@ -466,6 +474,10 @@ class Link {
       for (const u of pending) this.classify(u.sid, u.track)
       const ai = this.pendingAudio.findIndex((x) => x.stream.id === this.remoteScr)
       if (this.remoteScr && ai >= 0) this.attachScreenAudio(this.pendingAudio.splice(ai, 1)[0].stream)
+    } else if (m.k === 'util') {
+      utilBus.handler?.(this.id, m.d)
+    } else if (m.k === 'mus') {
+      musicBus.handler?.(this.id, m.d)
     } else if (m.k === 'tun') {
       this.startTunnel(false)
     } else if (m.k === 'w') {
@@ -705,6 +717,7 @@ class Link {
 function openLink(id, tunnelNow = false) {
   const link = new Link(id, tunnelNow)
   links.set(id, link)
+  musicBus.onLink?.(id) // quien ya tiene música en marcha se la cuenta al que llega (con el enlace ya registrado, para poder escribirle)
   return link
 }
 
