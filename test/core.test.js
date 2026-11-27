@@ -31,7 +31,8 @@ async function waitFor(fn, ms = 15000, what = 'condición') {
 let testnet
 const nodes = []
 async function spawn(key, dir = tmp()) {
-  const n = new ChatNode({ dir, groupKey: key, dht: testnet.createNode() })
+  // Reintento de búsqueda rápido: si en una máquina cargada la primera búsqueda se pierde, se recupera dentro del plazo de la prueba
+  const n = new ChatNode({ dir, groupKey: key, dht: testnet.createNode(), rediscover: { firstMs: 3000, maxMs: 6000, connectedMs: 60000 } })
   n.testDir = dir
   await n.start()
   nodes.push(n)
