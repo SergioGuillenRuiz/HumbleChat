@@ -37,24 +37,42 @@ function decide({ current, latest, latestSeen }) {
   return { block: false, latest: null, reason: 'unverified' }
 }
 
-/**
- * Consulta la última publicación. `fetchFn` es `fetch` (o `net.fetch`). Devuelve { version, url } o null si falla
- * por cualquier motivo (red, HTTP distinto de 200, JSON raro, tiempo agotado). Nunca lanza.
- */
-async function fetchLatest(fetchFn, url, { timeoutMs = 5000 } = {}) {
+/** Pide `url` con tiempo máximo y devuelve la respuesta, o null si falla de cualquier forma. */
+async function tryFetch(fetchFn, url, opts, timeoutMs) {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), timeoutMs)
   try {
-    const res = await fetchFn(url, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'HumbleChat' }, signal: ctl.signal })
-    if (!res.ok) return null
-    const rel = await res.json()
-    const version = parseVersion(rel?.tag_name)
-    return version ? { version, url: typeof rel.html_url === 'string' ? rel.html_url : null } : null
+    return await fetchFn(url, { ...opts, signal: ctl.signal })
   } catch {
     return null
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Consulta la última publicación. `fetchFn` es `fetch` (o `net.fetch`). Devuelve { version, url } o null si falla
+ * por cualquier motivo (red, HTTP distinto de 200, JSON raro, tiempo agotado). Nunca lanza.
+ *
+ * La API de GitHub limita las peticiones sin identificar por IP (60 por hora): con datos móviles, donde muchos
+ * comparten IP, se agota enseguida y sin canal alternativo el bloqueo por versión dejaría pasar versiones viejas.
+ * Por eso, si la API no responde, se pregunta a `fallbackUrl` (https://github.com/<repo>/releases/latest), que redirige
+ * a la etiqueta de la última publicación y no pasa por la API.
+ */
+async function fetchLatest(fetchFn, url, { timeoutMs = 5000, fallbackUrl = null } = {}) {
+  const res = await tryFetch(fetchFn, url, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'HumbleChat' } }, timeoutMs)
+  if (res?.ok) {
+    try {
+      const rel = await res.json()
+      const version = parseVersion(rel?.tag_name)
+      if (version) return { version, url: typeof rel.html_url === 'string' ? rel.html_url : null }
+    } catch {}
+  }
+  if (!fallbackUrl) return null
+  const red = await tryFetch(fetchFn, fallbackUrl, { method: 'HEAD', redirect: 'follow', headers: { 'user-agent': 'HumbleChat' } }, timeoutMs)
+  const m = red?.ok && /\/releases\/tag\/([^/?#]+)/.exec(red.url || '')
+  const version = m ? parseVersion(decodeURIComponent(m[1])) : null
+  return version ? { version, url: red.url } : null
 }
 
 module.exports = { parseVersion, isNewer, decide, fetchLatest }

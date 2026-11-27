@@ -139,7 +139,7 @@ async function startNode(key) {
     bootstrap = [process.env.HUMBLECHAT_BOOTSTRAP]
     dhtOpts = { host: process.env.HUMBLECHAT_DHT_HOST || '127.0.0.1' } // DHT_HOST: pruebas con espacios de red (NAT simulado)
   }
-  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts })
+  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts, appVersion: app.getVersion() })
   tunnels = new UdpTunnels(node)
   if (process.env.HUMBLECHAT_NET_DEBUG) globalThis.__hcNode = node // solo diagnóstico de pruebas (test/lib.js lo lee con app.evaluate)
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
@@ -379,7 +379,7 @@ function setupIpc() {
   handle('setVoice', (_e, v) => node.setVoice(v))
   handle('signal', (_e, to, data) => node.signal(to, data))
   // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
-  handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null))
+  handle('tunnel:open', async (_e, id) => (typeof id === 'string' && node?.peers.has(id) && tunnels ? tunnels.open(id) : null)) // devuelve [{ address, port }]
   handle('tunnel:close', (_e, id) => { if (typeof id === 'string') tunnels?.close(id) })
   handle('tunnel:stats', (_e, id) => (typeof id === 'string' ? tunnels?.stats(id) ?? null : null))
   handle('addBlob', (_e, { data, name, mime, w, ht }) => {
@@ -412,6 +412,7 @@ function setupIpc() {
     arch: process.arch,
     electron: process.versions.electron,
     network: network.source === 'por defecto' ? 'públicos (DHT Hyperswarm + STUN)' : 'propios (' + path.basename(network.source) + ')',
+    update: updates?.lastCheck?.() ?? null,
     ...node.diagnostics()
   }))
   handle('openExternal', (_e, url) => openExternal(url))

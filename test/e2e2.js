@@ -295,27 +295,6 @@ async function sistema() {
     await close()
     await n3.testnet.destroy()
 
-    console.log('Voz y vídeo sin conexión WebRTC directa (túnel por la red P2P)')
-    const n5 = await startNet()
-    const [q1, q2] = [await launch(n5, 'Ana', { env }), await launch(n5, 'Beto', { env })]
-    apps.push(q1, q2)
-    for (const p of [q1, q2]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 2, 25000, 'se ven')
-    const [j1, j2] = [await idOf(q1), await idOf(q2)]
-    // Sin candidatos reales: la única forma de que WebRTC conecte es el túnel (como con un CGNAT de datos móviles)
-    await q1.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v] })), j2)
-    await q2.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v] })), j1)
-    await joinVoice([q1, q2])
-    await waitFor(() => hears(q2, 'Ana'), 30000, 'Beto oye a Ana por el túnel')
-    await waitFor(() => hears(q1, 'Beto'), 30000, 'Ana oye a Beto por el túnel')
-    const paths = await q1.page.evaluate(async () => (await (await import('/voice.js')).diagnostics()).map((d) => d.path))
-    if (!paths.length || !paths.every((x) => x === 'por túnel de la red P2P')) throw new Error('el camino debería ser el túnel, no: ' + paths.join(', '))
-    ok('sin conexión directa de WebRTC, la voz viaja por el túnel de la red P2P')
-    await q1.page.locator('.round[aria-label="Encender cámara"]').click()
-    await waitFor(() => q2.page.evaluate(() => [...document.querySelectorAll('.tile.has-cam video.cam')].some((v) => v.videoWidth > 0)), 30000, 'Beto ve la cámara de Ana por el túnel')
-    ok('la cámara también llega por el túnel')
-    await close()
-    await n5.testnet.destroy()
-
     console.log('Integración con el sistema: bandeja y audio al compartir pantalla')
     const n4 = await startNet()
     const t = await launch(n4, 'Ana', { env: { HUMBLECHAT_FORCE_TRAY: '1' } }); apps.push(t)
@@ -349,9 +328,59 @@ async function sistema() {
   }
 }
 
+/** Voz y cámara sin ningún candidato real de WebRTC: solo el túnel por la red P2P (también se ejecuta en Windows). */
+async function tunel() {
+  const apps = []
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  let n5
+  try {
+    const env = { HUMBLECHAT_FAKE_AUDIO_FILE: path.join(__dirname, 'speech.wav') }
+    const idOf = (p) => p.page.evaluate(() => window.humble.init().then((i) => i.me.id))
+    console.log('Voz y vídeo sin conexión WebRTC directa (túnel por la red P2P)')
+    n5 = await startNet()
+    const [q1, q2] = [await launch(n5, 'Ana', { env }), await launch(n5, 'Beto', { env })]
+    apps.push(q1, q2)
+    for (const p of [q1, q2]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 2, 25000, 'se ven')
+    const [j1, j2] = [await idOf(q1), await idOf(q2)]
+    // Sin candidatos reales: la única forma de que WebRTC conecte es el túnel (como con un CGNAT de datos móviles)
+    await q1.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v], verbose: true })), j2)
+    await q2.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v], verbose: true })), j1)
+    await joinVoice([q1, q2])
+    await waitFor(() => hears(q2, 'Ana'), 30000, 'Beto oye a Ana por el túnel')
+    await waitFor(() => hears(q1, 'Beto'), 30000, 'Ana oye a Beto por el túnel')
+    const paths = await q1.page.evaluate(async () => (await (await import('/voice.js')).diagnostics()).map((d) => d.path))
+    if (!paths.length || !paths.every((x) => x === 'por túnel de la red P2P')) throw new Error('el camino debería ser el túnel, no: ' + paths.join(', '))
+    const dg = await q1.page.evaluate(async () => (await (await import('/voice.js')).diagnostics())[0])
+    if (!dg.tunnel || !(dg.tunnel.tx > 0 && dg.tunnel.rx > 0)) throw new Error('el diagnóstico debería contar paquetes del túnel: ' + JSON.stringify(dg.tunnel))
+    if (!dg.ice || dg.ice.state !== 'connected' && dg.ice.state !== 'completed') throw new Error('estado ICE inesperado: ' + JSON.stringify(dg.ice))
+    ok('sin conexión directa de WebRTC, la voz viaja por el túnel de la red P2P (y el diagnóstico lo cuenta)')
+    await q1.page.locator('.round[aria-label="Encender cámara"]').click()
+    await waitFor(() => q2.page.evaluate(() => [...document.querySelectorAll('.tile.has-cam video.cam')].some((v) => v.videoWidth > 0)), 30000, 'Beto ve la cámara de Ana por el túnel')
+    ok('la cámara también llega por el túnel')
+    // Pantalla compartida (Xvfb tarda a veces en dar la lista de pantallas: se reintenta el gesto)
+    for (let i = 0; i < 4; i++) {
+      await q1.page.locator('.round[aria-label="Compartir pantalla"]').click()
+      if (await q1.page.locator('.src-card').first().waitFor({ timeout: 25000 }).then(() => true, () => false)) break
+      await q1.page.keyboard.press('Escape')
+    }
+    await q1.page.locator('.src-card').first().click()
+    await waitFor(async () => (await count(q2, '.tile-watch')) > 0, 20000, 'Beto ve el botón de ver pantalla')
+    await q2.page.locator('.tile-watch').click()
+    await waitFor(() => q2.page.evaluate(() => { const v = document.querySelector('.theater video'); return !!v && v.videoWidth > 0 }), 40000, 'Beto recibe el vídeo de la pantalla por el túnel')
+    ok('la pantalla compartida también llega por el túnel')
+  } catch (e) {
+    await capturarFallo('e2e2-tunel')
+    throw e
+  } finally {
+    await close()
+    await n5?.testnet.destroy().catch(() => {})
+  }
+}
+
 ;(async () => {
   if (!only || only === 'contenido') await content()
   if (!only || only === 'sistema') await sistema()
+  if (!only || only === 'tunel') await tunel()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })

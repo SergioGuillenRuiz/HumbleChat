@@ -33,6 +33,25 @@ test('decide: bloquea solo si hay una versión más nueva conocida', () => {
   assert.equal(decide({ current: '0.2.0', latest: 'basura', latestSeen: '' }).block, false)
 })
 
+test('fetchLatest: si la API de GitHub no responde (límite por IP en datos móviles), usa la redirección de /releases/latest', async () => {
+  let api = '403'
+  const srv = http.createServer((q, r) => {
+    if (q.url.startsWith('/api')) { if (api === 'hang') return; r.statusCode = 403; return r.end('rate limit') }
+    if (q.url === '/o/r/releases/latest') { r.statusCode = 302; r.setHeader('location', '/o/r/releases/tag/v0.4.1'); return r.end() }
+    if (q.url === '/o/r/releases/tag/v0.4.1') { r.statusCode = 200; return r.end('<html>') }
+    r.statusCode = 404; r.end()
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${srv.address().port}`
+  try {
+    assert.deepEqual(await fetchLatest(fetch, base + '/api', { fallbackUrl: base + '/o/r/releases/latest' }), { version: '0.4.1', url: base + '/o/r/releases/tag/v0.4.1' })
+    assert.equal(await fetchLatest(fetch, base + '/api'), null, 'sin canal alternativo, null')
+    api = 'hang'
+    assert.deepEqual((await fetchLatest(fetch, base + '/api', { timeoutMs: 150, fallbackUrl: base + '/o/r/releases/latest' })).version, '0.4.1', 'también si la API no contesta')
+    assert.equal(await fetchLatest(fetch, base + '/api', { fallbackUrl: base + '/nada' }), null, 'si el alternativo tampoco sirve')
+  } finally { srv.closeAllConnections?.(); srv.close() }
+})
+
 test('fetchLatest: lee la última publicación y nunca lanza', async () => {
   let mode = 'ok'
   const srv = http.createServer((_q, r) => {
@@ -193,6 +212,18 @@ test('volver a comprobar: si ya no hace falta, se reinicia; si sigue obsoleta, n
   m.lookupResult.value = { version: '0.2.0', url: null }
   assert.equal((await m.ctl.recheck()).block, false)
   assert.equal(m.calls.relaunch, 1)
+  m.ctl.stop()
+})
+
+test('el Diagnóstico sabe cómo fue la última comprobación', async () => {
+  const m = make({ latest: null })
+  assert.equal(m.ctl.lastCheck(), null)
+  await m.ctl.check()
+  assert.deepEqual({ ...m.ctl.lastCheck(), at: 0 }, { at: 0, ok: false, latest: null, current: '0.2.0' })
+  m.lookupResult.value = { version: '0.2.0', url: null }
+  await m.ctl.check()
+  assert.equal(m.ctl.lastCheck().ok, true)
+  assert.equal(m.ctl.lastCheck().latest, '0.2.0')
   m.ctl.stop()
 })
 

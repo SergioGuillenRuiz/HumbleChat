@@ -338,7 +338,7 @@ class Link {
   constructor(id, tunnelNow = false) {
     this.id = id
     this.tunnel = false // ¿se le ha dado a WebRTC el túnel por la red P2P como camino de respaldo?
-    this.tunPort = null
+    this.tunAddrs = null // [{ address, port }] del túnel: los "otros extremos" que se dan a WebRTC como candidatos
     this.tunApplied = false
     this.tunnelOnly = (dbg().tunnelOnly || []).includes(id) // solo pruebas: sin candidatos reales, solo el túnel
     this.polite = state.me.id > id // desempate fijo para "perfect negotiation"
@@ -414,11 +414,11 @@ class Link {
   async startTunnel(announce) {
     if (this.tunnel || this.closed) return
     if (!this.tunnelOnly && this.pc.connectionState === 'connected') return
-    let port = null
-    try { port = await window.humble.tunnelOpen(this.id) } catch {}
-    if (!port || this.closed || this.tunnel) return // sin conexión directa con este amigo no hay túnel posible
+    let addrs = null
+    try { addrs = await window.humble.tunnelOpen(this.id) } catch {}
+    if (!addrs?.length || this.closed || this.tunnel) return // sin conexión directa con este amigo no hay túnel posible
     this.tunnel = true
-    this.tunPort = port
+    this.tunAddrs = addrs
     if (announce) this.send({ k: 'tun' }) // el otro extremo también debe usarlo
     this.applyTunnel()
     bus.emit('voice')
@@ -426,8 +426,13 @@ class Link {
 
   /** El candidato se pierde con cada reinicio de ICE, así que se vuelve a dar tras cada descripción remota. */
   applyTunnel() {
-    if (!this.tunPort || !this.pc.remoteDescription) return
-    this.pc.addIceCandidate({ candidate: `candidate:99 1 udp 1000 127.0.0.1 ${this.tunPort} typ host`, sdpMLineIndex: 0 }).catch(() => {})
+    if (!this.tunAddrs || !this.pc.remoteDescription) return
+    this.tunAddrs.forEach(({ address, port }, i) => {
+      // Prioridad baja: si la conexión directa llega a funcionar, WebRTC se quedará con ella
+      this.pc.addIceCandidate({ candidate: `candidate:${90 + i} 1 udp ${1000 - i} ${address} ${port} typ host`, sdpMLineIndex: 0 })
+        .then(() => { this.tunAdded = (this.tunAdded || 0) + 1; this.tunErr = null })
+        .catch((e) => { this.tunErr = String(e?.message || e).slice(0, 160) })
+    })
   }
 
   enqueue(msg) { this.queue = this.queue.then(() => this.handle(msg)).catch((e) => console.warn('signal', e)) }
@@ -613,9 +618,23 @@ class Link {
     if (pair) {
       if (pair.currentRoundTripTime != null) out.rtt = Math.round(pair.currentRoundTripTime * 1000)
       const types = [byId.get(pair.localCandidateId)?.candidateType, byId.get(pair.remoteCandidateId)?.candidateType]
-      const viaTunnel = [byId.get(pair.remoteCandidateId), byId.get(pair.localCandidateId)].some((c) => (c?.address || c?.ip) === '127.0.0.1')
+      const rc = byId.get(pair.remoteCandidateId) // el "otro extremo" del túnel es uno de nuestros propios sockets locales
+      const viaTunnel = !!this.tunAddrs?.some((a) => a.port === rc?.port && a.address === (rc?.address || rc?.ip))
       if (!this.relayedBy) out.path = viaTunnel ? 'por túnel de la red P2P' : types.includes('relay') ? 'por relé TURN' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
     }
+    // Datos para saber POR QUÉ no conecta: estado de ICE, candidatos propios por tipo y pares probados
+    const cand = {}
+    const pairs = { inProgress: 0, succeeded: 0, failed: 0, waiting: 0 }
+    st.forEach((r) => {
+      if (r.type === 'local-candidate') cand[r.candidateType] = (cand[r.candidateType] || 0) + 1
+      else if (r.type === 'candidate-pair') pairs[r.state] = (pairs[r.state] || 0) + 1
+    })
+    out.ice = { state: this.pc.iceConnectionState, gathering: this.pc.iceGatheringState, cand, pairs, added: this.tunAdded || 0, err: this.tunErr || null }
+    if (dbg().verbose) { // solo con depuración activa: direcciones propias (no se muestran en el informe normal)
+      out.ice.local = []
+      st.forEach((r) => { if (r.type === 'local-candidate' || r.type === 'remote-candidate') out.ice.local.push(`${r.type === 'local-candidate' ? 'L' : 'R'} ${r.candidateType} ${r.address || r.ip}:${r.port}`) })
+    }
+    out.tunnel = this.tunnel ? (await window.humble.tunnelStats(this.id).catch(() => null)) || { tx: 0, rx: 0, drops: 0 } : null
     const prev = this.prev || {}
     const cur = {}
     const best = {}

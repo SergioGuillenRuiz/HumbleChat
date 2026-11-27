@@ -201,7 +201,8 @@ async function buildReport(voice) {
     line('Servicios de red', d.network),
     ...(state.nat ? [line('Tipo de red (NAT)', { cone: 'cono (bueno)', symmetric: 'simétrico (problemático)', unknown: 'desconocido', blocked: 'UDP bloqueado' }[state.nat.type]), '                       ' + state.nat.text] : []),
     ...(d.status.mismatch ? [line('¡Atención!', 'un amigo tiene OTRA VERSIÓN de la app y no puede conectarse')] : []),
-    line('Amigos conectados', d.peers.length + (d.peers.length ? '  (' + d.peers.map((p) => p.name + ' ' + p.link).join(', ') + ')' : '')),
+    line('Amigos conectados', d.peers.length + (d.peers.length ? '  (' + d.peers.map((p) => `${p.name} ${p.link}, ${p.app ? 'versión ' + p.app : 'versión anterior a la 0.2.2'}`).join('; ') + ')' : '')),
+    line('Comprobar versión', d.update ? (d.update.ok ? `última publicada ${d.update.latest} (hace ${Math.round((Date.now() - d.update.at) / 60000)} min)` : 'SIN RESPUESTA de GitHub: no se puede saber si hay una versión nueva') : 'aún sin comprobar'),
     ''
   ]
   const calls = state.voice ? await voice.diagnostics() : []
@@ -211,6 +212,13 @@ async function buildReport(voice) {
     const name = state.byId.get(c.id)?.name || c.id.slice(0, 6)
     const st = { connected: 'conectado', connecting: 'conectando', new: 'iniciando', disconnected: 'desconectado', failed: 'FALLIDO', closed: 'cerrado' }[c.state] || c.state
     out.push('', `· ${name}: ${st}, ${c.path}, ping ${f(c.rtt)} ms`)
+    if (c.ice) {
+      const t = (o) => Object.entries(o).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'ninguno'
+      out.push(`    ICE ${c.ice.state} (candidatos propios: ${t(c.ice.cand)}; pares: ${t(c.ice.pairs)})`)
+      if (c.tunnel || c.ice.added || c.ice.err) out.push(`    candidato del túnel: añadido ${c.ice.added} vez/veces${c.ice.err ? ', ERROR: ' + c.ice.err : ''}`)
+      if (c.ice.local) out.push('    candidatos: ' + c.ice.local.join(' | '))
+      out.push('    túnel por la red P2P: ' + (c.tunnel ? `ACTIVO (paquetes ↑${c.tunnel.tx} ↓${c.tunnel.rx}, descartados ${c.tunnel.drops})` : 'no activado'))
+    }
     if (c.audioOut) out.push(`    audio ↑ ${f(c.audioOut.codec)} ${f(c.audioOut.kbps)} kbps`)
     if (c.audioIn) out.push(`    audio ↓ ${f(c.audioIn.kbps)} kbps · jitter ${f(c.audioIn.jitter)} ms · pérdida ${f(c.audioIn.lostPct)} %`)
     for (const [k, arrow] of [['videoOut', '↑'], ['videoIn', '↓']]) {

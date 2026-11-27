@@ -107,8 +107,10 @@ class ChatNode extends EventEmitter {
    * @param {object} [o.dhtOpts]  opciones extra para la DHT (solo tests: host 127.0.0.1)
    * @param {object} [o.relay]    tiempos del relé de presencia y señales (solo tests)
    */
-  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {} }) {
+  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {}, appVersion = '', rediscover = {} }) {
     super()
+    this.rediscoverCfg = { firstMs: 15000, maxMs: 120000, connectedMs: 180000, tickMs: 2000, ...rediscover }
+    this.appVersion = String(appVersion || '').slice(0, 20)
     this.dir = dir
     this.groupKey = groupKey
     this.bootstrap = bootstrap
@@ -167,6 +169,7 @@ class ChatNode extends EventEmitter {
 
     this.discovery = this.swarm.join(topicOf(this.groupKey), { server: true, client: true })
     this.relay.start()
+    this._startRediscovery()
     this.connectTimer = setTimeout(() => { if (!this.ready) this._setState('offline') }, 15000)
     this.pumpTimer = setInterval(() => this._pumpBlobs(), 20000)
     this.pumpTimer.unref?.()
@@ -180,12 +183,35 @@ class ChatNode extends EventEmitter {
     this._setState('connecting')
   }
 
+  /**
+   * Hyperswarm solo repite la búsqueda de amigos cada 10 minutos. Si la primera falla (paquetes perdidos, NAT simétrico con
+   * puertos aleatorios), alguien se quedaría sin ver a nadie ese rato. Mientras no haya ningún amigo conectado se repite con
+   * retroceso (15 s, 30 s, 1 min… hasta 2 min); con amigos, solo de vez en cuando para encontrar a los que falten.
+   */
+  _startRediscovery() {
+    const c = this.rediscoverCfg
+    let last = Date.now()
+    let wait = c.firstMs
+    this.rediscoverTimer = setInterval(() => {
+      if (this.stopped) return
+      const lonely = this.peers.size === 0
+      if (!lonely) wait = c.firstMs // al volver a quedarse solo, se empieza otra vez deprisa
+      const due = lonely ? wait : c.connectedMs
+      if (Date.now() - last < due) return
+      last = Date.now()
+      if (lonely) wait = Math.min(wait * 2, c.maxMs)
+      this.discovery?.refresh().catch(() => {})
+    }, c.tickMs)
+    this.rediscoverTimer.unref?.()
+  }
+
   async stop() {
     if (this.stopped) return
     this.stopped = true
     clearTimeout(this.connectTimer)
     clearInterval(this.pumpTimer)
     clearInterval(this.nodesTimer)
+    clearInterval(this.rediscoverTimer)
     this.relay.stop()
     this._saveNodes()
     for (const p of [...this.all]) { p.send({ t: 'bye' }); }
@@ -286,7 +312,7 @@ class ChatNode extends EventEmitter {
     }
     return {
       status: this.status(),
-      peers: [...this.peers.values()].map((p) => ({ name: this.store.names.get(p.id)?.name || p.name || p.id.slice(0, 6), link: link(p) }))
+      peers: [...this.peers.values()].map((p) => ({ name: this.store.names.get(p.id)?.name || p.name || p.id.slice(0, 6), link: link(p), app: p.app || null }))
     }
   }
 
@@ -482,6 +508,7 @@ class ChatNode extends EventEmitter {
       v: PROTOCOL,
       proof: proofOf(this.groupKey, conn.handshakeHash),
       name: this.name,
+      app: this.appVersion, // versión de la aplicación (solo informativa: sirve para diagnosticar amigos con versión antigua)
       voice: this.voice
     })
   }
@@ -514,6 +541,7 @@ class ChatNode extends EventEmitter {
       }
       peer.ready = true
       peer.name = typeof m.name === 'string' ? m.name.slice(0, LIMITS.name) : null
+      peer.app = typeof m.app === 'string' && /^[0-9A-Za-z.+-]{1,20}$/.test(m.app) ? m.app : null
       peer.voice = cleanVoice(m.voice)
       const old = this.peers.get(peer.id)
       this.peers.set(peer.id, peer)

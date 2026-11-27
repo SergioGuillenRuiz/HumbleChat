@@ -28,6 +28,7 @@ class UpdateController {
     this.updater = null
     this.downloaded = false
     this.timers = new Set()
+    this.last = null // resultado de la última comprobación, para el Diagnóstico
   }
 
   _later(fn, ms) {
@@ -44,8 +45,12 @@ class UpdateController {
 
   state() { return this.msg }
 
+  /** { at, ok, latest } de la última comprobación (null si aún no hubo ninguna o el bloqueo está inactivo). */
+  lastCheck() { return this.last ? { ...this.last, current: this.current } : null }
+
   async _evaluate() {
     const info = await this.lookup()
+    this.last = { at: Date.now(), ok: !!info, latest: info?.version ?? null }
     if (info) this.store.set(info.version) // lo publicado manda: si se retira una versión, se olvida
     const d = decide({ current: this.current, latest: info?.version ?? null, latestSeen: this.store.get() })
     return { ...d, url: info?.url ?? null }

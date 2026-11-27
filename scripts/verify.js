@@ -21,9 +21,10 @@ const steps = [
 if (!quick) {
   if (linux) {
     steps.push({ name: 'Interfaz completa, 3 instancias', cmd: ['npm', 'run', 'test:e2e'], gui: true })
-    steps.push({ name: 'Contenido, audio y voz con relé', cmd: ['npm', 'run', 'test:e2e2'], gui: true })
+    steps.push({ name: 'Contenido, audio y voz con relé y túnel', cmd: ['npm', 'run', 'test:e2e2'], gui: true })
   } else {
     steps.push({ name: 'Contenido de la interfaz', cmd: ['node', 'test/e2e2.js', 'contenido'], gui: true })
+    steps.push({ name: 'Voz y cámara por el túnel P2P', cmd: ['node', 'test/e2e2.js', 'tunel'], gui: true })
   }
 }
 

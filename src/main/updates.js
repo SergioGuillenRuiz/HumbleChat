@@ -46,7 +46,7 @@ function startUpdates({ send, settings, stopNetwork, onForced }) {
   const ctl = new UpdateController({
     current: app.getVersion(),
     active: () => !!url && !process.env.HUMBLECHAT_NO_UPDATE_GATE && (app.isPackaged || !!process.env.HUMBLECHAT_UPDATE_URL),
-    lookup: () => fetchLatest((u, o) => net.fetch(u, o), url),
+    lookup: () => fetchLatest((u, o) => net.fetch(u, o), url, { fallbackUrl: !process.env.HUMBLECHAT_UPDATE_URL && REPO ? `https://github.com/${REPO}/releases/latest` : null }),
     store: { get: () => settings.get('latestSeen'), set: (v) => settings.set({ latestSeen: v }) },
     canAutoUpdate,
     createUpdater,
