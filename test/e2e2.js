@@ -343,8 +343,8 @@ async function tunel() {
     for (const p of [q1, q2]) await waitFor(async () => (await count(p, '.member:not(.offline)')) === 2, 25000, 'se ven')
     const [j1, j2] = [await idOf(q1), await idOf(q2)]
     // Sin candidatos reales: la única forma de que WebRTC conecte es el túnel (como con un CGNAT de datos móviles)
-    await q1.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v] })), j2)
-    await q2.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v] })), j1)
+    await q1.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v], verbose: true })), j2)
+    await q2.page.evaluate((v) => localStorage.setItem('hc.dbg', JSON.stringify({ tunnelOnly: [v], verbose: true })), j1)
     await joinVoice([q1, q2])
     await waitFor(() => hears(q2, 'Ana'), 30000, 'Beto oye a Ana por el túnel')
     await waitFor(() => hears(q1, 'Beto'), 30000, 'Ana oye a Beto por el túnel')

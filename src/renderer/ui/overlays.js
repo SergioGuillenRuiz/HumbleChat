@@ -215,6 +215,8 @@ async function buildReport(voice) {
     if (c.ice) {
       const t = (o) => Object.entries(o).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'ninguno'
       out.push(`    ICE ${c.ice.state} (candidatos propios: ${t(c.ice.cand)}; pares: ${t(c.ice.pairs)})`)
+      if (c.tunnel || c.ice.added || c.ice.err) out.push(`    candidato del túnel: añadido ${c.ice.added} vez/veces${c.ice.err ? ', ERROR: ' + c.ice.err : ''}`)
+      if (c.ice.local) out.push('    candidatos: ' + c.ice.local.join(' | '))
       out.push('    túnel por la red P2P: ' + (c.tunnel ? `ACTIVO (paquetes ↑${c.tunnel.tx} ↓${c.tunnel.rx}, descartados ${c.tunnel.drops})` : 'no activado'))
     }
     if (c.audioOut) out.push(`    audio ↑ ${f(c.audioOut.codec)} ${f(c.audioOut.kbps)} kbps`)
