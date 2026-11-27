@@ -353,6 +353,11 @@ function messageMenu(e, ev) {
 }
 
 const plainText = (t) => t.replace(/<@([0-9a-f]{64})>/g, (_s, id) => '@' + nameOf(id))
+/** Para las vistas previas (búsqueda, fijados): sin las marcas de Markdown, que en una línea corta se leen como ruido. */
+const previewText = (t) => plainText(t)
+  .replace(/```[a-z0-9+#-]*\n?([\s\S]*?)```/gi, '$1').replace(/`([^`\n]+)`/g, '$1')
+  .replace(/\*\*([^*\n]+)\*\*/g, '$1').replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1$2').replace(/~~([^~\n]+)~~/g, '$1')
+  .replace(/^> ?/gm, '').replace(/\s*\n\s*/g, ' ')
 
 function reactionsBar(ev) {
   const id = evId(ev)
@@ -760,7 +765,7 @@ function renderPanel() {
           !pins && h('div.sr-ch', icon('hash', 14), channel(m.ch)?.name || m.ch),
           h('div.sr-msg', avatar(who, 32),
             h('div.sr-body', h('div.sr-head', h('b', who.name), h('time', fmtStamp(m.ts))),
-              h('div.sr-text', pins ? plainText(m.text || '📎 Archivo') : highlight(plainText(m.text || (m.att?.length ? m.att.map((a) => a.name).join(', ') : '')), panel.q))),
+              h('div.sr-text', pins ? previewText(m.text || '📎 Archivo') : highlight(previewText(m.text || (m.att?.length ? m.att.map((a) => a.name).join(', ') : '')), panel.q))),
             pins && h('button.icon-btn', { tip: 'Quitar de fijados', onclick: (e) => { e.stopPropagation(); window.humble.pin(id, false) } }, icon('close', 16))))
       })))
 }

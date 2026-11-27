@@ -55,6 +55,10 @@ process.on('unhandledRejection', (e) => console.error('[humblechat] unhandledRej
 
 let win = null
 let node = null
+const RELEASES_URL = (() => { // página de descargas del proyecto, para el aviso de invitar a un amigo
+  const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(require('../../package.json').repository?.url || '')
+  return m ? `https://github.com/${m[1]}/releases/latest` : null
+})()
 let tunnels = null
 let rendererReady = false
 let quitting = false
@@ -348,6 +352,7 @@ function setupIpc() {
       pickerNeeded: !IS_WAYLAND, // en Wayland ya pregunta el portal del sistema
       settings: settings.all(),
       version: app.getVersion(),
+      releasesUrl: RELEASES_URL,
       room: { fingerprint: fingerprint(currentKey) }
     }
   })

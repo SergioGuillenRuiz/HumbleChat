@@ -184,10 +184,11 @@ export async function openInvite() {
   el.append(h('div.modal',
     h('div.modal-body', h('h2', 'Invitar a un amigo'),
       h('p.muted', 'No hay cuentas ni enlaces: tu amigo solo necesita la misma aplicación que tú.'),
-      step(1, 'Pásale la aplicación', 'El instalador o archivo que compilaste (ya trae la sala), o el de la página de descargas del proyecto.'),
-      step(2, 'Si no trae la sala, pásale el código', 'Al abrirla por primera vez te pide el código de sala: que lo pegue y listo.'),
+      step(1, 'Pásale la aplicación', 'Que la descargue de la página del proyecto (instalador de Windows o AppImage de Linux). Se actualiza sola.'),
+      state.releasesUrl && h('div.code-box', h('code', state.releasesUrl), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(state.releasesUrl).then(() => toast('Enlace de descarga copiado', 'ok')) }, 'Copiar')),
+      step(2, 'Pásale el código de sala', 'Al abrirla por primera vez le pide el código de la sala: que lo pegue y listo. Pásaselo solo a quien quieras que entre.'),
       h('div.code-box', h('code', info.code || '—'), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(info.code).then(() => toast('Código de sala copiado', 'ok')) }, 'Copiar')),
-      step(3, 'Misma versión para todos', `Estás usando la ${d.version ? 'versión ' + d.version : 'versión actual'}. Si alguien no te ve, mira la barra lateral: avisa si es una versión distinta.`)),
+      step(3, 'Misma versión para todos', `Estás usando la ${d.version ? 'versión ' + d.version : 'versión actual'}. La aplicación solo funciona con la última versión publicada: si alguien no te ve, que la actualice.`)),
     h('div.modal-foot', h('button.btn.brand', { onclick: close }, 'Entendido'))))
 }
 
@@ -567,6 +568,7 @@ export function openSettings(voice, startTab = 'account') {
         h('div.kv', h('span', 'Red'), h('b', label)),
         h('div.kv', h('span', 'Amigos conectados'), h('b', String(peers.length))),
         h('div.kv', h('span', 'Tu ID'), h('code.inline', state.me.id.slice(0, 16)))),
+      h('p.muted', 'Tu ID es tu identidad: una clave que se crea sola en este equipo (no hay cuentas ni contraseñas). Firma todo lo que escribes, así nadie puede hacerse pasar por ti. Si borras los datos de la aplicación, tendrás otro ID.'),
       h('p.muted', 'No hay servidor: las apps se encuentran en una red P2P y se conectan directamente entre ellas. El historial se guarda en cada equipo y se sincroniza al coincidir.')
     )
   }

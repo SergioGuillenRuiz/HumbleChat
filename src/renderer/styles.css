@@ -613,3 +613,8 @@ video { pointer-events: none; }
 .theater-wait p { margin: 0; max-width: 360px; font-size: 14px; line-height: 1.4; }
 .theater-wait b { color: var(--text-head); font-size: 16px; }
 .tile video.cam.wait { visibility: hidden; }
+
+/* Los botones no parten su texto en dos líneas ni se aplastan en las filas de ajustes */
+.btn, button.btn { white-space: nowrap; }
+.sw-row > .btn, .sw-row > button { flex: none; }
+.sw-row > div:first-child { min-width: 0; flex: 1; }

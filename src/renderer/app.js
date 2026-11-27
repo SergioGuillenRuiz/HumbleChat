@@ -23,7 +23,7 @@ async function boot() {
   state.version = init.version
   Object.assign(state, {
     me: init.me, server: init.server, channels: init.channels, status: init.status, platform: init.platform,
-    pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers
+    pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers, releasesUrl: init.releasesUrl
   })
   setMembers(init.members)
   for (const peer of init.dms || []) state.dms.set(peer, init.last['dm:' + peer]?.ts || 0)
