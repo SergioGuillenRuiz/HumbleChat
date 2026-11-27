@@ -175,3 +175,22 @@ test('cada amigo informa de la versión de su aplicación (para diagnosticar ver
   assert.equal(a.diagnostics().peers[0].app, null, 'una versión que no informa aparece como desconocida')
   assert.equal(b.diagnostics().peers[0].app, '0.2.2')
 })
+
+test('sin ningún amigo conectado se repite la búsqueda con retroceso; con amigos, solo de vez en cuando', async () => {
+  const K = key()
+  const cfg = { firstMs: 120, maxMs: 480, connectedMs: 5000, tickMs: 20 }
+  const a = new ChatNode({ dir: tmp(), groupKey: K, dht: testnet.createNode(), rediscover: cfg })
+  await a.start(); nodes.push(a)
+  let refreshes = 0
+  const orig = a.discovery.refresh.bind(a.discovery)
+  a.discovery.refresh = () => { refreshes++; return orig() }
+  await sleep(1500)
+  assert.ok(refreshes >= 3, 'solo y sin amigos: reintenta (' + refreshes + ')')
+  assert.ok(refreshes <= 8, 'pero con retroceso, sin martillear la red (' + refreshes + ')')
+  const b = new ChatNode({ dir: tmp(), groupKey: K, dht: testnet.createNode(), rediscover: cfg })
+  await b.start(); nodes.push(b)
+  await until(() => a.peers.size === 1, 20000, 'se encuentran')
+  const n = refreshes
+  await sleep(800)
+  assert.ok(refreshes - n <= 1, 'con un amigo conectado ya no insiste (' + (refreshes - n) + ')')
+})
