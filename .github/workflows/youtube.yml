@@ -1,0 +1,57 @@
+name: YouTube real
+
+# Sonda con YouTube de verdad (test/youtube.js): el reproductor de «Escuchar juntos» de producción, en su ventana oculta y muda, con
+# vídeos reales (arranque, posición, pausa, búsqueda, fin de pista, errores) y la búsqueda/listas por nombre. YouTube cambia sin
+# avisar, así que corre cada día y no bloquea las PR; el resultado queda en el resumen del trabajo y en los registros.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: ['claude/**']
+    paths:
+      - 'test/youtube.js'
+      - 'src/main/player/**'
+      - 'src/main/musicplayer.js'
+      - 'src/main/ytmeta.js'
+      - 'src/main/ytsearch.js'
+      - '.github/workflows/youtube.yml'
+
+jobs:
+  sonda:
+    name: Sonda con YouTube (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Instalar Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
+      - name: Sonda (Linux)
+        if: runner.os == 'Linux'
+        env:
+          YT_PROBE_DUMP: ${{ runner.temp }}/yt-probe.json
+        run: xvfb-run -a -s "-screen 0 1280x720x24" npx electron --no-sandbox test/youtube.js
+      - name: Sonda (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          YT_PROBE_DUMP: ${{ runner.temp }}/yt-probe.json
+        run: npx electron test/youtube.js
+      - name: Subir el detalle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonda-youtube-${{ matrix.os }}
+          path: ${{ runner.temp }}/yt-probe.json
+          if-no-files-found: ignore
+          retention-days: 14

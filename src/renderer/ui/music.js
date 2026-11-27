@@ -124,7 +124,7 @@ function onLink(id) {
 function onPlayer(e) {
   if (!M.listening && e.st !== 'none') return // un resto de lo que sonaba antes de dejar de escuchar
   if (e.dur > 0 && e.n) M.durs.set(e.n, e.dur)
-  M.player = { n: e.n, st: e.st, pos: e.pos, dur: e.dur }
+  M.player = { n: e.n, st: e.st, pos: e.pos, dur: e.dur, vid: e.vid }
   if (e.st === 'playing') { M.errStreak = 0; if (M.err?.n === e.n) { M.err = null; bus.emit('music') } }
   if (e.e === 'error') return onPlayerError(e)
   if (L.shouldAdvance({ state: M.s, player: M.player })) return act((s) => L.advance(s, e.n)) // acabó la pista: cualquiera lo propone, es idéntico

@@ -43,6 +43,7 @@ function cleanEvent(e) {
     st: STATES.has(e.st) ? e.st : 'none',
     pos: num(e.pos, 0, 86400),
     dur: num(e.dur, 0, 86400),
+    vid: typeof e.vid === 'string' && ID.test(e.vid) ? e.vid : null,
     ...(e.e === 'error' ? { code: Math.trunc(num(e.code, -9, 1000)) } : {})
   }
 }

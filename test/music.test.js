@@ -287,6 +287,9 @@ test('plan: qué le dice el estado al reproductor local', async () => {
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40 } }), [{ op: 'seek', pos: 15 }])
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 13 } }), [])
   assert.deepEqual(m.plan({ ...base, lastSeekAt: 3000, player: { n: 'n001', st: 'playing', pos: 40 } }), [])
+  // suena otro vídeo (un anuncio): no se le pide nada aunque el desvío sea enorme
+  assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40, vid: 'anuncio0001' } }), [])
+  assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40, vid: V1 } }), [{ op: 'seek', pos: 15 }])
   // cargando o con error: no se le pide nada
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'loading', pos: 0 } }), [])
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'error', pos: 0 } }), [])
@@ -379,8 +382,9 @@ test('el proceso principal solo acepta órdenes y eventos con la forma exacta', 
   for (const op of ['play', 'pause', 'stop']) assert.deepEqual(cleanCommand({ op, junk: 1 }), { op })
   for (const bad of [null, undefined, 'load', {}, { op: 'eval' }, { op: 'navigate', url: 'file:///etc/passwd' }]) assert.equal(cleanCommand(bad), null)
 
-  assert.deepEqual(cleanEvent({ e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, otra: 1 }), { e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212 })
-  assert.deepEqual(cleanEvent({ e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 }), { e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 })
+  assert.deepEqual(cleanEvent({ e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, vid: 'dQw4w9WgXcQ', otra: 1 }), { e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, vid: 'dQw4w9WgXcQ' })
+  assert.equal(cleanEvent({ e: 'tick', vid: '<script>' }).vid, null)
+  assert.deepEqual(cleanEvent({ e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 }), { e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, vid: null, code: 150 })
   assert.equal(cleanEvent({ e: 'state', n: 'no valido!', st: 'rarísimo', pos: NaN, dur: 'x' }).st, 'none')
   assert.equal(cleanEvent({ e: 'state', n: 'no valido!', st: 'x', pos: NaN, dur: 'x' }).n, null)
   assert.equal(cleanEvent({ e: 'state', st: 'playing', pos: Infinity }).pos, 0)

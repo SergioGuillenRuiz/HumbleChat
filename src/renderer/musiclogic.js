@@ -217,6 +217,8 @@ export function plan({ state, at, now, listening, player, sent = null, lastSeekA
     return [{ op: 'load', v: cur.v, n: cur.n, pos: want, play: state.play }]
   }
   if (player.st === 'loading' || player.st === 'error') return []
+  // Suena otro vídeo que el pedido: es un anuncio de YouTube. No se toca (cada uno ve los suyos y se corregiría en vano).
+  if (player.vid && player.vid !== cur.v) return []
   const cmds = []
   const sounding = player.st === 'playing' || player.st === 'buffering'
   if (state.play && player.st === 'paused') cmds.push({ op: 'play' })
