@@ -3,7 +3,8 @@
 // en una ventana oculta y muda? A diferencia del reproductor incrustado, no depende de que el dueño permita incrustar, no exige
 // referer y se pueden saltar los anuncios. Cuenta qué pasa segundo a segundo.
 //
-//   npx electron test/ytwatch.js <idVídeo> [segundos]
+//   npx electron test/ytwatch.js <idVídeo> [segundos] [--prune] [--next=<otroId>]
+const path = require('path');
 const { app, BrowserWindow, session } = require('electron');
 
 if (process.argv.includes('--no-sandbox')) app.commandLine.appendSwitch('no-sandbox');
@@ -11,6 +12,8 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 const ID = process.argv.find((a) => /^[\w-]{11}$/.test(a)) || 'dQw4w9WgXcQ';
 const SECS = Number(process.argv.find((a) => /^\d+$/.test(a))) || 40;
+const PRUNE = process.argv.includes('--prune');
+const NEXT = process.argv.find((a) => a.startsWith('--next='))?.slice(7);
 const t0 = Date.now();
 const say = (...a) => console.log(String(Date.now() - t0).padStart(6), ...a);
 
@@ -37,7 +40,10 @@ app.whenReady().then(async () => {
   }
   const win = new BrowserWindow({
     show: false, width: 1000, height: 700,
-    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required' }
+    webPreferences: {
+      session: ses, sandbox: true, nodeIntegration: false, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required',
+      ...(PRUNE ? { preload: path.join(__dirname, '..', 'src', 'main', 'watch-preload.js'), contextIsolation: false } : { contextIsolation: true })
+    }
   });
   const wc = win.webContents;
   wc.setUserAgent(wc.getUserAgent().replace(/\s(?:Electron|humblechat)\/\S+/gi, ''));
@@ -52,9 +58,10 @@ app.whenReady().then(async () => {
     const s = JSON.parse(await run(PROBE));
     say(JSON.stringify(s));
     if (s.skip && skipped < 3) { skipped++; say('  → pulso «saltar anuncio»', await run(`(() => { const b = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern'); if (b) { b.click(); return 'clic'; } return 'sin botón'; })()`)); }
-    if (i === 12 && s.api) { say('  → seekTo(60)'); await run(`document.getElementById('movie_player').seekTo(60, true)`); }
-    if (i === 20 && s.api) { say('  → pauseVideo'); await run(`document.getElementById('movie_player').pauseVideo()`); }
-    if (i === 24 && s.api) { say('  → playVideo'); await run(`document.getElementById('movie_player').playVideo()`); }
+    if (i === 12 && s.api && !s.ad) { say('  → seekTo(60)'); await run(`document.getElementById('movie_player').seekTo(60, true)`); }
+    if (i === 20 && s.api && !s.ad) { say('  → pauseVideo'); await run(`document.getElementById('movie_player').pauseVideo()`); }
+    if (i === 24 && s.api && !s.ad) { say('  → playVideo'); await run(`document.getElementById('movie_player').playVideo()`); }
+    if (i === 30 && s.api && NEXT) { say('  → loadVideoById(' + NEXT + ')'); await run(`document.getElementById('movie_player').loadVideoById('${NEXT}', 5)`); }
   }
   win.destroy();
   app.exit(0);
