@@ -50,7 +50,8 @@ function createWatchEngine({ session, onEvent }) {
   let last = '';
   let audio = { vol: 60, mute: false };
   let qualitySet = null;
-  let chain = Promise.resolve();
+  let staleSince = 0;
+  let autonavOff = false;
 
   const alive = () => win && !win.isDestroyed();
   const exec = (js) => (alive() ? win.webContents.executeJavaScript(js, true).catch(() => null) : Promise.resolve(null));
@@ -80,8 +81,19 @@ function createWatchEngine({ session, onEvent }) {
         return;
       }
       if (s.err) return fail(errorCode(s.err));
-      // Aún suena (o carga) el vídeo anterior: hasta que cambie el identificador no se cuenta nada de él
+      // Aún suena (o carga) el vídeo anterior, o YouTube se fue solo a otro (reproducción automática del siguiente): no se cuenta
+      // nada de él y, si se alarga, se vuelve a pedir el nuestro
       const stale = s.vid && cur.v && s.vid !== cur.v && !s.ad;
+      if (!stale) staleSince = 0;
+      else if (!staleSince) staleSince = Date.now();
+      else if (Date.now() - staleSince > 12000) {
+        staleSince = Date.now();
+        exec(call(`p.loadVideoById({ videoId: ${JSON.stringify(cur.v)}, startSeconds: 0 })`));
+      }
+      if (!autonavOff) { // sin reproducción automática: la lista de la llamada manda, no las recomendaciones de YouTube
+        autonavOff = true;
+        exec(`(() => { const b = document.querySelector('.ytp-autonav-toggle-button[aria-checked="true"]'); if (b) b.click(); return !!b; })()`);
+      }
       let st = stale ? 'loading' : s.ad ? 'buffering' : STATES[s.st] || 'loading';
       if (pending !== null && !stale && (st === 'playing' || st === 'buffering') && !s.ad) { // «cargar sin reproducir»: se pausa en cuanto hay reproductor
         if (pending === false) { exec(call('p.pauseVideo()')); st = 'paused'; }
@@ -93,6 +105,7 @@ function createWatchEngine({ session, onEvent }) {
         exec(call("p.setPlaybackQualityRange && p.setPlaybackQualityRange('tiny', 'tiny')"));
         exec(call(`p.setVolume(${audio.vol})`));
       }
+      if (st === 'ended') exec(call('p.pauseVideo()')); // que no se vaya a otro vídeo mientras la aplicación decide cuál toca
       const evt = { st, pos: stale ? 0 : Number(s.t) || 0, dur: stale ? 0 : Number(s.d) || 0, vid: stale ? null : s.vid || null, ad: !!s.ad };
       const key = `${cur.n}|${st}|${evt.ad}`;
       emit(key !== last ? 'state' : 'tick', evt);
@@ -133,13 +146,14 @@ function createWatchEngine({ session, onEvent }) {
     last = '';
     qualitySet = null;
     loadedAt = Date.now();
+    staleSince = 0;
     emit('state', { st: 'loading' });
+    if (alive()) wc().setAudioMuted(audio.mute); // tras un «parar» la ventana quedó muda
     if (!alive()) {
       open();
       pending = c.play;
-      wc().setAudioMuted(true); // hasta que sepamos que debe sonar, nada se oye
+      wc().setAudioMuted(c.play ? audio.mute : true); // si va a empezar en pausa, nada se oye hasta que se pause
       win.loadURL(watchUrl(c.v, c.pos), { httpReferrer: 'https://www.youtube.com/' }).catch((e) => { if (cur.n === c.n) { console.warn('[musica] no se pudo cargar youtube.com:', e?.message || e); fail(-3); } });
-      if (c.play) setTimeout(() => { if (alive()) wc().setAudioMuted(audio.mute); }, 0);
       return;
     }
     const arg = `{ videoId: ${JSON.stringify(c.v)}, startSeconds: ${Math.floor(c.pos)} }`;
@@ -165,15 +179,14 @@ function createWatchEngine({ session, onEvent }) {
         err = null;
         pending = null;
         await exec(call('p.stopVideo()'));
+        if (alive()) wc().setAudioMuted(true); // por si YouTube intentara seguir con otro vídeo: nada se oye hasta la siguiente carga
+        pending = null;
         return emit('state', { st: 'none', n: null });
     }
   }
 
   return {
-    command(c) {
-      chain = chain.then(() => run(c)).catch((e) => console.warn('[musica]', e?.message || e));
-      return chain;
-    },
+    run,
     close() { clearInterval(timer); if (alive()) win.destroy(); win = null; cur = { n: null, v: null }; },
     window: () => (alive() ? win : null)
   };

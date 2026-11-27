@@ -4,19 +4,19 @@
 // tal cual, en su ventana oculta y MUDO, y cuenta qué pasa con vídeos reales: arranque, posición, pausa, búsqueda, cambio de
 // vídeo, fin de pista, errores y anuncios. No toca nada del usuario y no enseña ninguna ventana.
 //
+// Motor: el de producción («watch», la página de vídeo sin anuncios); con YT_ENGINE=embed, el reproductor incrustado.
 //   npx electron test/youtube.js                       (con pantalla)
 //   xvfb-run -a npx electron --no-sandbox test/youtube.js   (Linux sin pantalla)
 const { app } = require('electron')
 const { createMusicPlayer } = require('../src/main/musicplayer')
-const { searchVideos, playlistVideos } = require('../src/main/ytsearch')
 
 if (process.env.HUMBLECHAT_NO_SANDBOX || process.argv.includes('--no-sandbox')) app.commandLine.appendSwitch('no-sandbox')
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 const VIDEOS = {
   zoo: 'jNQXAC9IVRw', // «Me at the zoo»: 19 s, el primer vídeo de YouTube
-  rick: 'dQw4w9WgXcQ', // 3:33
-  gangnam: '9bZkp7q19f0',
+  rick: 'dQw4w9WgXcQ', // 3:33; el dueño NO permite incrustarlo y lleva anuncios: el caso difícil
+  gangnam: '9bZkp7q19f0', // 4:12, con anuncios
   nope: 'AAAAAAAAAAA' // no existe
 }
 
@@ -38,9 +38,10 @@ app.on('web-contents-created', (_e, wc) => {
 })
 
 const player = createMusicPlayer({
+  engine: process.env.YT_ENGINE || undefined,
   onEvent: (e) => {
     log.push({ t: ms(), ...e })
-    if (e.e !== 'tick') say('  ·', e.e, e.st, 'n=' + e.n, 'pos=' + e.pos.toFixed(1), 'dur=' + e.dur, 'vid=' + e.vid, e.code !== undefined ? 'code=' + e.code : '')
+    if (e.e !== 'tick') say('  ·', e.e, e.st, 'n=' + e.n, 'pos=' + e.pos.toFixed(1), 'dur=' + e.dur, 'vid=' + e.vid, e.ad ? 'ANUNCIO' : '', e.code !== undefined ? 'code=' + e.code : '')
   }
 })
 
@@ -84,7 +85,9 @@ async function escenarioControles() {
   let since = from()
   await load(VIDEOS.rick, 'rick0001', 30, true)
   const play = await waitFor((e) => e.n === 'rick0001' && e.st === 'playing', 30000, since)
+  check('el vídeo que no se deja incrustar suena igualmente', play, play ? `tardó ${play.t - (since && log[since] ? log[since].t : play.t)} ms` : '(no sonó)')
   check('arranca en la posición pedida (30 s)', play && play.pos >= 29 && play.pos < 40, play ? 'pos=' + play.pos.toFixed(1) : '(no sonó)')
+  check('sin anuncios', !log.slice(since).some((e) => e.ad), '')
   if (!play) return
   check('duración de 3:33', play.dur > 205 && play.dur < 220, 'dur=' + play.dur)
 
@@ -132,7 +135,7 @@ async function escenarioErrores() {
   const since = from()
   await load(VIDEOS.nope, 'nope0001', 0, true)
   const err = await waitFor((e) => e.n === 'nope0001' && e.e === 'error', 20000, since)
-  check('un vídeo que no existe da error 100 (o 2)', err && (err.code === 100 || err.code === 2), err ? 'code=' + err.code : '(sin error)')
+  check('un vídeo que no existe da error', err && [2, 100, 101, 150].includes(err.code), err ? 'code=' + err.code : '(sin error)')
   // Los que no se dejan incrustar los da el propio YouTube: se prueban los que digan «noembed» al consultar su título
   for (const [name, v] of Object.entries({ gangnam: VIDEOS.gangnam })) {
     const meta = await player.meta(v)
@@ -154,19 +157,38 @@ async function escenarioMeta() {
 
 async function escenarioBusqueda() {
   say('— Escenario 4: búsqueda por nombre y listas de reproducción')
-  const net = (await import('electron')).net
-  const f = (u, o) => net.fetch(u, o)
-  try {
-    const r = await searchVideos('me at the zoo', f)
-    say('  ', r.length, 'resultados; el primero:', JSON.stringify(r[0]))
-    check('la búsqueda devuelve resultados con título y duración', r.length >= 3 && r.every((x) => /^[\w-]{11}$/.test(x.v) && x.t), r.length + ' resultados')
-    check('«me at the zoo» está entre los primeros', r.some((x) => x.v === VIDEOS.zoo))
-  } catch (e) { check('búsqueda', false, String(e.message || e)) }
-  try {
-    const r = await playlistVideos('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI', f) // lista pública de YouTube
-    say('  ', r.length, 'vídeos en la lista')
-    check('una lista pública devuelve vídeos', r.length >= 5 && r.every((x) => /^[\w-]{11}$/.test(x.v)), r.length + ' vídeos')
-  } catch (e) { check('lista de reproducción', false, String(e.message || e)) }
+  const r = await player.search('me at the zoo')
+  say('  ', r.ok ? r.items.length + ' resultados; el primero: ' + JSON.stringify(r.items[0]) : r.error)
+  check('la búsqueda devuelve resultados con título y duración', r.ok && r.items.length >= 3 && r.items.every((x) => /^[\w-]{11}$/.test(x.v) && x.t), r.ok ? r.items.length + ' resultados' : r.error)
+  check('«me at the zoo» está entre los primeros', r.ok && r.items.some((x) => x.v === VIDEOS.zoo))
+  const l = await player.playlist('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI') // lista pública de YouTube
+  say('  ', l.ok ? l.items.length + ' vídeos en la lista' : l.error)
+  check('una lista pública devuelve vídeos', l.ok && l.items.length >= 5 && l.items.every((x) => /^[\w-]{11}$/.test(x.v)), l.ok ? l.items.length + ' vídeos' : l.error)
+  const bad = await player.search('   ')
+  check('una búsqueda vacía da un error claro', bad.ok === false && /Escribe/.test(bad.error), JSON.stringify(bad))
+}
+
+/** Anuncios y reproducción automática: con un vídeo con publicidad y al acabar uno corto, no debe colarse nada ajeno. */
+async function escenarioSinAnuncios() {
+  say('— Escenario 5: sin anuncios en un vídeo de una discográfica y sin saltar solo a otro al acabar')
+  let since = from()
+  const t = Date.now()
+  await load(VIDEOS.gangnam, 'gang0001', 0, true)
+  const play = await waitFor((e) => e.n === 'gang0001' && e.st === 'playing' && !e.ad, 40000, since)
+  check('empieza a sonar el vídeo con publicidad', play, play ? `en ${Date.now() - t} ms` : '')
+  await sleep(25000) // el anuncio, si lo hubiera, aparece en los primeros segundos
+  check('ni un solo anuncio en 25 s', !log.slice(since).some((e) => e.ad), '')
+  const pos = (lastOf('gang0001') || {}).pos
+  check('la posición avanza sin saltos', pos > 15 && pos < 40, 'pos=' + (pos || 0).toFixed(1))
+  since = from()
+  await load(VIDEOS.zoo, 'zoo00009', 15, true) // empieza a 4 s del final
+  const end = await waitFor((e) => e.n === 'zoo00009' && e.st === 'ended', 30000, since)
+  check('el vídeo corto acaba y lo avisa', end)
+  since = from()
+  await sleep(12000)
+  const other = log.slice(since).find((e) => e.vid && e.vid !== VIDEOS.zoo && e.st === 'playing')
+  check('al acabar no salta solo a otro vídeo', !other, other ? 'vid=' + other.vid : '')
+  await player.command({ op: 'stop' })
 }
 
 async function main() {
@@ -179,6 +201,7 @@ async function main() {
   await run('controles', escenarioControles)
   await run('errores', escenarioErrores)
   await run('busqueda', escenarioBusqueda)
+  await run('anuncios', escenarioSinAnuncios)
   const bad = checks.filter((c) => !c.ok)
   say(`\nRESULTADO: ${checks.length - bad.length}/${checks.length} comprobaciones bien`)
   for (const c of bad) say('  FALLA:', c.name, c.detail)

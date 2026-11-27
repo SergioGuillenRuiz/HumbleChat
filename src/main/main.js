@@ -420,6 +420,8 @@ function setupIpc() {
   // «Escuchar juntos»: el reproductor de YouTube vive en su propia ventana (ver musicplayer.js)
   handle('music:meta', (_e, id) => music.meta(id))
   handle('music:thumb', (_e, id) => music.thumb(id))
+  handle('music:search', (_e, q) => music.search(typeof q === 'string' ? q : ''))
+  handle('music:playlist', (_e, id) => music.playlist(typeof id === 'string' ? id : ''))
   handle('music:cmd', (_e, cmd) => music.command(cmd))
   handle('signal', (_e, to, data) => node.signal(to, data))
   // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
