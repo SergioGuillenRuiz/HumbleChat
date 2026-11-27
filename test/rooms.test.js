@@ -41,7 +41,8 @@ test('la primera sala nueva usa su carpeta propia; las demás, otra; nombres y p
   const again = new RoomStore(d) // lo guardado sobrevive
   assert.deepEqual(again.list().map((r) => [r.id, r.name, r.dir]), s.list().map((r) => [r.id, r.name, r.dir]))
   assert.equal(again.active.id, b.id)
-  assert.equal((fs.statSync(path.join(d, 'rooms.json')).mode & 0o777) & 0o077, 0, 'rooms.json (lleva las llaves) solo para el usuario')
+  // Permisos POSIX (0600): Windows no los tiene; allí el archivo queda protegido por la carpeta de perfil del usuario
+  if (process.platform !== 'win32') assert.equal((fs.statSync(path.join(d, 'rooms.json')).mode & 0o777) & 0o077, 0, 'rooms.json (lleva las llaves) solo para el usuario')
 })
 
 test('la sala de antes de las salas múltiples conserva su historial donde estaba, sin moverlo', () => {
