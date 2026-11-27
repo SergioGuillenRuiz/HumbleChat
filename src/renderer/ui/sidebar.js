@@ -3,14 +3,14 @@ import { h, avatar, fill, store } from '../util.js'
 import { icon } from '../icons.js'
 import { state, bus, member, markRead, channel } from '../state.js'
 import { voice, isMuted } from '../voice.js'
-import { openSettings, openVolumeMenu, openContextMenu, openInvite, openChannelModal, confirmModal, toast } from './overlays.js'
+import { openSettings, openVolumeMenu, openContextMenu, openInvite, openChannelModal, openRoomModal, confirmModal, toast } from './overlays.js'
 import { openProfile } from './popout.js'
 
 let root
 
 export function mountSidebar(el) {
   root = el
-  for (const evt of ['members', 'voice', 'unread', 'view', 'status', 'collapsed', 'channels', 'dms']) bus.on(evt, render)
+  for (const evt of ['members', 'voice', 'unread', 'view', 'status', 'collapsed', 'channels', 'dms', 'rooms']) bus.on(evt, render)
   bus.on('speaking', applySpeaking)
   render()
 }
@@ -73,6 +73,7 @@ function serverMenu(e) {
     { label: 'Invitar a amigos', icon: 'invite', onclick: () => openInvite() },
     { label: 'Crear canal', icon: 'add', onclick: () => channelDialog({}) },
     { label: 'Marcar todo como leído', icon: 'check', onclick: markAllRead },
+    ...(state.roomsLocked ? [] : [{ label: 'Añadir o crear una sala', icon: 'add', onclick: () => openRoomModal() }]),
     'sep',
     { label: 'Ajustes de usuario', icon: 'cog', onclick: () => openSettings(voice) },
     { label: 'Estado de la conexión', icon: 'signal', onclick: () => openSettings(voice, 'diag') }

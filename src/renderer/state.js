@@ -21,7 +21,11 @@ export const state = {
   iceServers: [],
   view: { ch: 'general' }, // canal que se muestra en el panel central
   unread: new Set(),
-  lastRead: store('lastRead') || {},
+  lastRead: {}, // marca de lectura por canal; se carga al conocer la sala (cada sala tiene las suyas)
+  lastReadKey: 'lastRead',
+  rooms: [], // salas: { id, name, fingerprint, active, unread, mentions }
+  roomsLocked: false, // sala fijada por el entorno: no se puede cambiar
+  roomId: null,
   showMembers: store('showMembers') !== false,
   speaking: new Set(),
   voice: null, // { ch, muted, deafened, sharing } mientras estás en una llamada
@@ -51,5 +55,5 @@ export function setMembers(list) {
 export function markRead(ch, ts) {
   if (!ts || (state.lastRead[ch] || 0) >= ts) return
   state.lastRead[ch] = ts
-  store('lastRead', state.lastRead)
+  store(state.lastReadKey, state.lastRead)
 }

@@ -100,15 +100,17 @@ class Peer {
 class ChatNode extends EventEmitter {
   /**
    * @param {object} o
-   * @param {string} o.dir        carpeta de datos (identidad, historial, adjuntos)
+   * @param {string} o.dir        carpeta de datos de la sala (historial, adjuntos)
+   * @param {string} [o.identityDir] carpeta de la identidad (por defecto, la misma; con varias salas se comparte)
    * @param {string} o.groupKey   llave del grupo
    * @param {string[]} [o.bootstrap] nodos de arranque propios ("host:puerto"); por defecto los públicos
    * @param {object} [o.dht]      DHT ya creada (tests con red local)
    * @param {object} [o.dhtOpts]  opciones extra para la DHT (solo tests: host 127.0.0.1)
    * @param {object} [o.relay]    tiempos del relé de presencia y señales (solo tests)
    */
-  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {}, appVersion = '', rediscover = {} }) {
+  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {}, appVersion = '', rediscover = {}, identityDir = null }) {
     super()
+    this.identityDir = identityDir || dir // la identidad es una sola para todas las salas; el historial, de cada una
     this.rediscoverCfg = { firstMs: 15000, maxMs: 120000, connectedMs: 180000, tickMs: 2000, ...rediscover }
     this.appVersion = String(appVersion || '').slice(0, 20)
     this.dir = dir
@@ -147,13 +149,13 @@ class ChatNode extends EventEmitter {
   get name() { return this.store.names.get(this.id)?.name || this.identity.name }
 
   async start() {
-    this.identity = loadIdentity(this.dir)
+    this.identity = loadIdentity(this.identityDir)
     this.store = new Store(path.join(this.dir, 'log'))
     this.store.open()
     this.blobs = new Blobs(path.join(this.dir, 'blobs'))
     this.lastTs = 0
 
-    if (this.store.names.get(this.id)?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name, ...this._avatarFields() })
+    this._syncProfile()
 
     // Nodos de la DHT conocidos de la última vez: permiten arrancar aunque los nodos de arranque públicos no respondan.
     this.nodesFile = path.join(this.dir, 'dht-nodes.json')
@@ -399,11 +401,32 @@ class ChatNode extends EventEmitter {
 
   /** `bytes` ya viene reducido (cuadrado, WebP); null quita el avatar. */
   setAvatar(bytes) {
-    if (!bytes) { this._author({ t: 'prof', name: this.name }); return null }
+    const file = path.join(this.identityDir, 'avatar.bin') // el avatar es de la persona, no de una sala: viaja a todas
+    if (!bytes) {
+      try { fs.rmSync(file, { force: true }) } catch {}
+      this._author({ t: 'prof', name: this.name })
+      return null
+    }
     if (bytes.length > LIMITS.avatar) throw new Error('El avatar pesa demasiado.')
     const { h, size } = this.blobs.put(Buffer.from(bytes))
+    try { fs.writeFileSync(file, Buffer.from(bytes)) } catch {}
     this._author({ t: 'prof', name: this.name, av: h, avs: size })
     return h
+  }
+
+  /** Al arrancar una sala: tu nombre y tu avatar actuales deben estar en su historial (una sala nueva empieza vacía). */
+  _syncProfile() {
+    const mine = this.store.names.get(this.id)
+    const file = path.join(this.identityDir, 'avatar.bin')
+    let bytes = null
+    try { bytes = fs.readFileSync(file) } catch {}
+    if (!bytes && mine?.av) { // avatar de antes de tener varias salas: solo estaba como adjunto de esta sala
+      try { bytes = fs.readFileSync(this.blobs.path(mine.av)); fs.writeFileSync(file, bytes) } catch { bytes = null }
+    }
+    if (bytes && bytes.length > 0 && bytes.length <= LIMITS.avatar) {
+      const { h, size } = this.blobs.put(bytes)
+      if (mine?.av !== h || mine?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name, av: h, avs: size })
+    } else if (mine?.name !== this.identity.name) this._author({ t: 'prof', name: this.identity.name, ...this._avatarFields() })
   }
 
   // ── mensajes directos ──

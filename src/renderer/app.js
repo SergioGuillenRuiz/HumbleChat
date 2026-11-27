@@ -4,9 +4,10 @@ import { state, bus, setMembers, channel } from './state.js'
 import { mountSidebar, openChannel } from './ui/sidebar.js'
 import { mountChat, showChannel, onEvents as onEventsChat, touchRead } from './ui/chat.js'
 import { mountMembers } from './ui/members.js'
+import { mountRail } from './ui/rail.js'
 import { mountVoiceView, render as renderVoiceView } from './ui/voiceview.js'
 import { voice } from './voice.js'
-import { toast } from './ui/overlays.js'
+import { toast, setVoiceApi } from './ui/overlays.js'
 import { renderGate } from './ui/updategate.js'
 import { play } from './sounds.js'
 import { initTooltips } from './tooltip.js'
@@ -17,6 +18,7 @@ let shownText = null
 
 async function boot() {
   initTooltips()
+  setVoiceApi(() => voice)
   const init = await window.humble.init()
   state.firstRun = firstRun
   state.settings = init.settings
@@ -25,6 +27,12 @@ async function boot() {
     me: init.me, server: init.server, channels: init.channels, status: init.status, platform: init.platform,
     pickerNeeded: init.pickerNeeded, limits: init.limits, iceServers: init.iceServers, releasesUrl: init.releasesUrl
   })
+  // Cada sala tiene sus propios "leído hasta": los canales se llaman igual en todas.
+  state.rooms = init.rooms || []
+  state.roomsLocked = !!init.roomsLocked
+  state.roomId = init.room?.id || null
+  state.lastReadKey = 'lastRead:' + state.roomId
+  state.lastRead = store(state.lastReadKey) || (state.rooms.length <= 1 ? store('lastRead') : null) || {} // lo de antes de las salas múltiples
   setMembers(init.members)
   for (const peer of init.dms || []) state.dms.set(peer, init.last['dm:' + peer]?.ts || 0)
   for (const id of [...state.channels.map((c) => c.id), ...[...state.dms.keys()].map((p) => 'dm:' + p)]) {
@@ -33,6 +41,7 @@ async function boot() {
   }
   state.view.ch = state.channels.find((c) => c.type === 'text')?.id
 
+  const rail = h('nav.rail')
   const sidebar = h('aside#sidebar')
   const chat = h('section#chat.pane')
   const voiceView = h('section#voiceview.pane.hidden')
@@ -40,14 +49,13 @@ async function boot() {
   append($('#app'), [
     state.platform === 'win32' && h('div#titlebar', icon('logo', 14), h('span', state.server)),
     h('div.shell',
-      h('nav.rail',
-        h('div.rail-item.active', { tip: state.server, tipPos: 'right' }, h('span.rail-pill'), h('div.rail-icon', h('span', state.server[0]))),
-        h('div.rail-sep')),
+      rail,
       sidebar,
       h('main#main', chat, voiceView),
       membersEl)
   ])
 
+  mountRail(rail)
   mountSidebar(sidebar)
   mountChat(chat)
   mountVoiceView(voiceView)
@@ -59,11 +67,16 @@ async function boot() {
     store('showMembers', state.showMembers)
     bus.emit('toggleMembers')
   })
-  bus.on('unread', () => {
-    const pings = [...state.mentions.values()].reduce((a, b) => a + b, 0)
-    document.title = (pings ? `(${pings}) ` : state.unread.size ? '• ' : '') + state.server
-    window.humble.badge(pings || state.unread.size).catch(() => {}) // insignia en la barra de tareas / dock
-  })
+  const refreshBadge = () => {
+    const others = state.rooms.filter((r) => !r.active) // lo no leído de las demás salas también cuenta
+    const pings = [...state.mentions.values()].reduce((a, b) => a + b, 0) + others.reduce((a, r) => a + r.mentions, 0)
+    const unread = state.unread.size + others.filter((r) => r.unread).length
+    document.title = (pings ? `(${pings}) ` : unread ? '• ' : '') + state.server
+    window.humble.badge(pings || unread).catch(() => {}) // insignia en la barra de tareas / dock
+  }
+  bus.on('unread', refreshBadge)
+  bus.on('rooms', refreshBadge)
+  bus.on('rooms', () => { const t = document.querySelector('#titlebar span'); if (t) t.textContent = state.server })
   window.addEventListener('focus', touchRead)
   // Pulsar para hablar: tecla global (desde Electron) y, además, con la ventana enfocada.
   const pttKey = (e) => state.prefs.ptt?.on && state.prefs.ptt.key?.code && e.code === state.prefs.ptt.key.code
@@ -138,6 +151,13 @@ function onMessage(msg) {
       setMembers(msg.members)
       state.me.name = state.byId.get(state.me.id)?.name || state.me.name
       return voice.sync()
+    case 'rooms': { // cambió la lista de salas o lo no leído de alguna
+      state.rooms = msg.rooms
+      state.roomsLocked = !!msg.locked
+      const mine = msg.rooms.find((r) => r.active)
+      if (mine) state.server = mine.name
+      return bus.emit('rooms')
+    }
     case 'status': state.status = msg.status; return bus.emit('status')
     case 'channels': {
       state.channels = msg.channels

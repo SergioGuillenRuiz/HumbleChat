@@ -55,6 +55,94 @@ export function confirmModal({ title, body, confirm = 'Aceptar', danger = false 
   })
 }
 
+// ───────────── Pedir un texto ─────────────
+export function promptModal({ title, label, value = '', confirm = 'Aceptar', max = 32 }) {
+  return new Promise((resolve) => {
+    const { el, close } = layer('modal-bg')
+    let done = false
+    const finish = (v) => { if (done) return; done = true; close(); resolve(v) }
+    const input = h('input.text', { value, maxLength: max, spellcheck: false, onkeydown: (e) => { if (e.key === 'Enter') finish(input.value.trim() || null) } })
+    el.addEventListener('dismiss', () => finish(null))
+    el.addEventListener('mousedown', (e) => { if (e.target === el) finish(null) })
+    el.append(h('div.modal',
+      h('div.modal-body', h('h2', title), h('label.field', label, input)),
+      h('div.modal-foot', h('button.btn.link', { onclick: () => finish(null) }, 'Cancelar'), h('button.btn.brand', { onclick: () => finish(input.value.trim() || null) }, confirm))))
+    input.focus(); input.select()
+  })
+}
+
+const roomError = (e) => toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'warn', 8000)
+
+/** Si estás en una llamada, cambiar de sala la corta: se pide confirmación. true = se puede seguir. */
+export async function leaveCallBeforeRoomChange(texto = 'Al cambiar de sala saldrás de la llamada.') {
+  if (!state.voice) return true
+  const ok = await confirmModal({ title: 'Estás en una llamada', body: h('p', texto), confirm: 'Salir de la llamada y continuar' })
+  if (ok) await voiceApi().leave()
+  return ok
+}
+let voiceApi = () => ({ leave() {} })
+export const setVoiceApi = (fn) => { voiceApi = fn } // evita un import circular con voice.js
+
+/** Añadir una sala: unirse con un código o crear una nueva (y compartir su código). */
+export function openRoomModal() {
+  const { el, close } = layer('modal-bg')
+  let mode = 'join'
+  let created = null
+  const nameIn = h('input.text', { placeholder: 'Por ejemplo: Los del fútbol (solo lo ves tú)', maxLength: 32, spellcheck: false })
+  const codeIn = h('input.text', { placeholder: 'Pega aquí el código de sala', spellcheck: false })
+  const body = h('div')
+  const foot = h('div.modal-foot')
+  el.addEventListener('mousedown', (e) => { if (e.target === el) close() })
+  async function go(code) {
+    if (!(await leaveCallBeforeRoomChange('Al entrar en otra sala saldrás de la llamada.'))) return
+    try { await window.humble.roomsAdd(code, nameIn.value.trim() || undefined) } catch (e) { roomError(e) } // la interfaz se recarga sola
+  }
+  function draw() {
+    const tab = (id, label) => h('button.seg-item' + (mode === id ? '.active' : ''), { onclick: () => { mode = id; created = null; draw() } }, label)
+    body.replaceChildren(...[
+      h('h2', 'Añadir una sala'),
+      h('p.muted', 'Puedes estar en varias salas a la vez, cada una con sus amigos y su historial. Nada se mezcla entre ellas.'),
+      h('div.seg', tab('join', 'Unirme con un código'), tab('create', 'Crear una sala nueva')),
+      h('label.field', 'Nombre de la sala', nameIn),
+      mode === 'join' && h('label.field', 'Código de sala', codeIn),
+      mode === 'create' && !created && h('p.muted', 'Se genera un código nuevo. Quien lo tenga podrá entrar: pásaselo solo a quien quieras.'),
+      mode === 'create' && created && h('div.field', h('div.label', 'Código de la sala nueva'),
+        h('div.code-box', h('code', created), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(created).then(() => toast('Código copiado', 'ok')) }, 'Copiar')),
+        h('p.muted', 'Cópialo y pásaselo a tus amigos. Después pulsa «Entrar en la sala».'))
+    ].filter(Boolean))
+    foot.replaceChildren(...[
+      h('button.btn.link', { onclick: close }, 'Cancelar'),
+      mode === 'join' && h('button.btn.brand', { onclick: () => codeIn.value.trim() ? go(codeIn.value) : codeIn.focus() }, 'Unirme'),
+      mode === 'create' && !created && h('button.btn.brand', { onclick: async () => { created = await window.humble.roomCreate(); draw() } }, 'Generar código'),
+      mode === 'create' && created && h('button.btn.green', { onclick: () => go(created) }, 'Entrar en la sala')
+    ].filter(Boolean))
+  }
+  codeIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && codeIn.value.trim()) go(codeIn.value) })
+  draw()
+  el.append(h('div.modal', h('div.modal-body', body), foot))
+  codeIn.focus()
+}
+
+/** Renombrar una sala (el nombre solo lo ves tú). */
+export async function renameRoomFlow(r) {
+  const name = await promptModal({ title: 'Renombrar la sala', label: 'Nombre (solo lo ves tú)', value: r.name, confirm: 'Guardar' })
+  if (name) await window.humble.roomsRename(r.id, name).catch(roomError)
+}
+
+/** Salir de una sala, con la opción de borrar también su historial de este equipo. */
+export async function leaveRoomFlow(r) {
+  const wipe = h('input', { type: 'checkbox' })
+  const ok = await confirmModal({
+    title: `Salir de «${r.name}»`, danger: true, confirm: 'Salir de la sala',
+    body: h('div',
+      h('p', 'Dejarás de ver esta sala y de recibir sus mensajes. Para volver a entrar necesitarás su código.'),
+      h('label.check', wipe, ' Borrar también su historial y archivos de este equipo'))
+  })
+  if (!ok) return
+  if (r.active && !(await leaveCallBeforeRoomChange('Al salir de la sala saldrás de la llamada.'))) return
+  await window.humble.roomsLeave(r.id, wipe.checked).catch(roomError)
+}
+
 // ───────────── Crear / editar un canal ─────────────
 /**
  * @param {{channel?: {id,type,name}, kind?: 'text'|'voice'}} o  con `channel` se edita; sin él se crea uno de tipo `kind`.
@@ -183,7 +271,7 @@ export async function openInvite() {
   const step = (n, title, text) => h('div.step', h('div.step-n', String(n)), h('div', h('b', title), h('p', text)))
   el.append(h('div.modal',
     h('div.modal-body', h('h2', 'Invitar a un amigo'),
-      h('p.muted', 'No hay cuentas ni enlaces: tu amigo solo necesita la misma aplicación que tú.'),
+      h('p.muted', 'No hay cuentas: tu amigo solo necesita la aplicación y el código de la sala.'),
       step(1, 'Pásale la aplicación', 'Que la descargue de la página del proyecto (instalador de Windows o AppImage de Linux). Se actualiza sola.'),
       state.releasesUrl && h('div.code-box', h('code', state.releasesUrl), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(state.releasesUrl).then(() => toast('Enlace de descarga copiado', 'ok')) }, 'Copiar')),
       step(2, 'Pásale el código de sala', 'Al abrirla por primera vez le pide el código de la sala: que lo pegue y listo. Pásaselo solo a quien quieras que entre.'),
@@ -502,41 +590,24 @@ export function openSettings(voice, startTab = 'account') {
     const box = h('div')
     ;(async () => {
       const info = await window.humble.roomInfo()
+      const me = state.rooms.find((r) => r.active) || { id: info.id, name: info.name || state.server }
       let shown = false
       const code = h('code', '•'.repeat(32))
       const toggle = h('button.btn.secondary.small', { onclick: () => { shown = !shown; code.textContent = shown ? info.code : '•'.repeat(32); toggle.textContent = shown ? 'Ocultar' : 'Mostrar' } }, 'Mostrar')
       const copy = h('button.btn.brand.small', { onclick: () => navigator.clipboard.writeText(info.code).then(() => toast('Código de sala copiado', 'ok')) }, 'Copiar')
-      const input = h('input.text', { placeholder: 'Pega aquí otro código de sala', spellcheck: false })
-      const join = h('button.btn.brand', { onclick: () => changeRoom(input.value) }, 'Cambiar')
-      const locked = info.envKey ? h('p.muted', 'La sala está fijada por la variable HUMBLECHAT_KEY y no se puede cambiar desde aquí.') : null
+      const nameIn = h('input.text', { value: me.name, maxLength: 32, spellcheck: false })
+      const save = h('button.btn.brand', { onclick: async () => { const n = nameIn.value.trim(); if (n) { await window.humble.roomsRename(me.id, n).catch(roomError); toast('Nombre guardado', 'ok') } } }, 'Guardar')
       box.replaceChildren(...[
         h('h2', 'Sala'),
-        h('p.muted', 'La sala es el grupo de amigos al que te conectas. Quien tenga el código puede entrar.'),
+        h('p.muted', 'La sala es el grupo de amigos al que te conectas. Quien tenga el código puede entrar. Puedes estar en varias a la vez: cámbiate de una a otra desde la barra de la izquierda.'),
+        !info.envKey && h('label.field', 'Nombre de esta sala (solo lo ves tú)', h('div.row', nameIn, save)),
         h('div.field', h('div.label', 'Huella de la sala'), h('div.fp', info.fingerprint), h('p.muted', 'Si tus amigos ven la misma huella, estáis en la misma sala.')),
         h('div.field', h('div.label', 'Código de sala'), h('div.code-box', code, toggle, copy), h('p.muted', 'Pásaselo solo a quien quieras que entre.')),
-        locked,
-        !info.envKey && h('label.field', 'Cambiar de sala', h('div.row', input, join)),
-        !info.envKey && h('div.field', h('button.btn.secondary', { onclick: createRoom }, 'Crear una sala nueva'),
-          h('p.muted', 'Útil si un amigo ya no debe entrar: con una sala nueva solo entran quienes reciban el código nuevo. Tu historial se conserva en este equipo.'))
-      ].filter(Boolean)) // sin esto, un null (sala fijada por variable de entorno ausente) se dibujaba como el texto «null»
+        info.envKey && h('p.muted', 'La sala está fijada por la variable HUMBLECHAT_KEY y no se puede cambiar desde aquí.'),
+        !info.envKey && h('div.field', h('div.row', h('button.btn.secondary', { onclick: () => openRoomModal() }, 'Añadir otra sala…'), h('button.btn.secondary', { onclick: () => leaveRoomFlow(me) }, 'Salir de esta sala…')),
+          h('p.muted', 'Si un amigo ya no debe entrar, crea una sala nueva y pasa el código solo a quienes quieras: la antigua queda como está. El historial de cada sala se guarda solo en tu equipo.'))
+      ].filter(Boolean))
     })()
-    async function changeRoom(text) {
-      if (!text.trim()) return
-      const ok = await confirmModal({ title: 'Cambiar de sala', body: h('p', 'Dejarás de ver esta sala hasta que vuelvas a introducir su código. Tu historial se conserva en este equipo.'), confirm: 'Cambiar' })
-      if (!ok) return
-      try { await window.humble.roomJoin(text) } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'warn', 8000) }
-    }
-    async function createRoom() {
-      const ok = await confirmModal({ title: 'Crear una sala nueva', body: h('p', 'Se genera un código nuevo. Tus amigos tendrán que introducirlo para entrar; quien tenga el código antiguo se quedará fuera.'), confirm: 'Crear' })
-      if (!ok) return
-      const code = await window.humble.roomCreate()
-      const { el, close } = layer('modal-bg')
-      el.append(h('div.modal',
-        h('div.modal-body', h('h2', 'Tu sala nueva'), h('p.muted', 'Copia este código y pásaselo a tus amigos. Después pulsa «Entrar a la sala nueva».'),
-          h('div.code-box', h('code', code), h('button.btn.secondary.small', { onclick: () => navigator.clipboard.writeText(code).then(() => toast('Código copiado', 'ok')) }, 'Copiar'))),
-        h('div.modal-foot', h('button.btn.link', { onclick: close }, 'Cancelar'),
-          h('button.btn.green', { onclick: () => window.humble.roomJoin(code).catch(() => toast('No se pudo cambiar de sala.', 'warn')) }, 'Entrar a la sala nueva'))))
-    }
     return box
   }
 

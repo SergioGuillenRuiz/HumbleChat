@@ -25,6 +25,7 @@ if (!quick) {
   } else {
     steps.push({ name: 'Contenido de la interfaz', cmd: ['node', 'test/e2e2.js', 'contenido'], gui: true })
     steps.push({ name: 'Voz y cámara por el túnel P2P', cmd: ['node', 'test/e2e2.js', 'tunel'], gui: true })
+    steps.push({ name: 'Varias salas', cmd: ['node', 'test/e2e2.js', 'salas'], gui: true })
   }
 }
 
@@ -34,15 +35,31 @@ const { spawn } = require('child_process')
 const outDir = path.join(root, 'test-results')
 fs.mkdirSync(outDir, { recursive: true })
 
+// Un paso colgado no debe dejar el CI esperando horas: pasado el límite se mata (con todo lo que haya lanzado) y cuenta como fallo.
+const STEP_MS = Number(process.env.VERIFY_STEP_MS) || 12 * 60 * 1000
+
+function killTree(child) {
+  try {
+    if (win) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    else process.kill(-child.pid, 'SIGKILL')
+  } catch {}
+}
+
 function run(cmd, args, file) {
   return new Promise((resolve) => {
     const log = fs.createWriteStream(file)
-    const child = spawn(cmd, args, { cwd: root, shell: win, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(cmd, args, { cwd: root, shell: win, stdio: ['ignore', 'pipe', 'pipe'], detached: !win })
     const tee = (chunk, out) => { out.write(chunk); log.write(chunk) }
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      tee(`\n[verify] el paso lleva más de ${Math.round(STEP_MS / 60000)} min sin terminar: se interrumpe (parece un cuelgue)\n`, process.stderr)
+      killTree(child)
+    }, STEP_MS)
     child.stdout.on('data', (c) => tee(c, process.stdout))
     child.stderr.on('data', (c) => tee(c, process.stderr))
-    child.on('error', (e) => { tee(`No se pudo ejecutar ${cmd}: ${e.message}\n`, process.stderr); log.end(); resolve(1) })
-    child.on('close', (code) => log.end(() => resolve(code)))
+    child.on('error', (e) => { clearTimeout(timer); tee(`No se pudo ejecutar ${cmd}: ${e.message}\n`, process.stderr); log.end(); resolve(1) })
+    child.on('close', (code) => { clearTimeout(timer); log.end(() => resolve(timedOut ? 124 : code)) })
   })
 }
 

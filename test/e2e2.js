@@ -218,13 +218,6 @@ async function sistema() {
     await b.page.waitForSelector('.fp')
     if ((await b.page.textContent('.fp')).replace(/\s/g, '') !== fingerprint(net.key).replace(/\s/g, '')) throw new Error('huella distinta')
     ok('la huella de la sala coincide en los dos equipos')
-    await b.page.locator('.btn', { hasText: 'Crear una sala nueva' }).click()
-    await b.page.locator('.modal .btn.brand').click()
-    await b.page.waitForSelector('.modal .code-box code')
-    await b.page.locator('.modal .btn.green').click()
-    await b.page.waitForSelector('.sb-header', { timeout: 20000 })
-    await waitFor(async () => (await count(a, '.member.offline')) === 1, 30000, 'A ya no ve a B')
-    ok('rotación de llave: con la sala nueva, Ana y Beto dejan de verse')
     await close()
 
     console.log('Audio: supresión de ruido, umbral y pulsar para hablar')
@@ -328,6 +321,108 @@ async function sistema() {
   }
 }
 
+/** Varias salas a la vez, cada una con su historial. */
+async function salas() {
+  const net = await startNet()
+  const apps = []
+  const close = async () => { for (const p of apps.splice(0)) await p.app.close().catch(() => {}) }
+  const rail = (p) => p.page.locator('.rail-item[data-room]')
+  const say = async (p, t) => { await p.page.fill('.composer textarea', t); await p.page.keyboard.press('Enter') }
+  const texts = (p) => p.page.locator('.msg').allTextContents()
+  const openRoomTab = async (p) => { await p.page.locator('.up-btns .icon-btn').last().click(); await p.page.locator('.st-item', { hasText: 'Sala' }).click(); await p.page.waitForSelector('.fp') }
+  try {
+    console.log('Varias salas a la vez, con el historial separado')
+    const ana = await launch(net, 'Ana'); apps.push(ana)
+    let beto = await launch(net, 'Beto', { noKey: true, ready: '.setup' }); apps.push(beto)
+    await beto.page.fill('#code', formatCode(net.key)); await beto.page.click('#join')
+    await beto.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await count(ana, '.member:not(.offline)')) === 2, 25000, 'se ven')
+    if ((await rail(beto).count()) !== 1) throw new Error('debería haber una sala')
+    await say(ana, 'mensaje de la sala vieja')
+    await waitFor(async () => (await texts(beto)).some((t) => t.includes('mensaje de la sala vieja')), 15000, 'llega a Beto')
+    ok('Beto entra en la primera sala con el código y recibe lo de Ana')
+
+    // Beto crea una sala nueva: el modal genera el código y entra en ella
+    await openRoomTab(beto)
+    await beto.page.locator('.btn', { hasText: 'Añadir otra sala' }).click()
+    await beto.page.locator('.seg-item', { hasText: 'Crear una sala nueva' }).click()
+    await beto.page.fill('.modal input.text >> nth=0', 'Los del fútbol')
+    await beto.page.locator('.modal .btn', { hasText: 'Generar código' }).click()
+    await beto.page.waitForSelector('.modal .code-box code')
+    const newCode = (await beto.page.textContent('.modal .code-box code')).trim()
+    await beto.page.locator('.modal .btn.green').click()
+    await beto.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await rail(beto).count()) === 2, 10000, 'dos salas en la barra')
+    if (!(await beto.page.locator('.sb-name').textContent()).includes('Los del fútbol')) throw new Error('la sala nueva debería llamarse como se pidió')
+    if ((await texts(beto)).some((t) => t.includes('mensaje de la sala vieja'))) throw new Error('el historial de la sala vieja aparece en la nueva')
+    ok('crear una sala nueva: aparece en la barra, con su nombre, vacía y sin el historial de la otra')
+
+    // Seguir conectado a la vieja en segundo plano: Ana lo ve en línea y lo que escribe cuenta como no leído
+    if ((await count(ana, '.member:not(.offline)')) !== 2) throw new Error('Ana debería seguir viendo a Beto: sigue conectado a la sala vieja')
+    await say(ana, 'otro mensaje mientras estás en la otra sala')
+    await waitFor(async () => (await beto.page.locator('.rail-item.unread[data-room]').count()) === 1, 15000, 'no leído en segundo plano')
+    ok('en la sala que no estás viendo sigues conectado: los amigos te ven y los mensajes cuentan como no leídos')
+
+    // Lo de una sala no llega a la otra
+    await say(beto, 'secreto del fútbol')
+    await sleep(2500)
+    if ((await texts(ana)).some((t) => t.includes('secreto del fútbol'))) throw new Error('lo de la sala nueva llegó a la vieja')
+    ok('lo escrito en la sala nueva no llega a la vieja')
+
+    // Volver a la vieja: el historial sigue ahí y ya no hay no leídos
+    await rail(beto).first().click()
+    await beto.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await texts(beto)).some((t) => t.includes('otro mensaje mientras estás')), 15000, 'historial de la sala vieja')
+    if ((await texts(beto)).some((t) => t.includes('secreto del fútbol'))) throw new Error('lo de la sala nueva aparece en la vieja')
+    if ((await beto.page.locator('.rail-item.unread[data-room]').count()) !== 0) throw new Error('debería haberse limpiado lo no leído')
+    ok('volver a la sala vieja: su historial está entero, sin lo de la otra, y sin no leídos')
+
+    // El tercer amigo entra a la sala nueva con el código y la ve completa (se sincroniza solo ahí)
+    const carla = await launch(net, 'Carla', { noKey: true, ready: '.setup' }); apps.push(carla)
+    await carla.page.fill('#code', newCode); await carla.page.click('#join')
+    await carla.page.waitForSelector('.sb-header', { timeout: 20000 })
+    await waitFor(async () => (await texts(carla)).some((t) => t.includes('secreto del fútbol')), 30000, 'Carla recibe el historial de la sala nueva')
+    if ((await texts(carla)).some((t) => t.includes('mensaje de la sala vieja'))) throw new Error('Carla recibió el historial de otra sala')
+    ok('quien entra en la sala nueva recibe su historial y nada de la otra')
+
+    // Reiniciar: las dos salas siguen y la activa se recuerda
+    await beto.app.close()
+    beto = await launch(net, 'Beto', { profile: beto.profile, noKey: true }); apps.push(beto)
+    await waitFor(async () => (await rail(beto).count()) === 2, 15000, 'las dos salas tras reiniciar')
+    ok('al reiniciar la aplicación siguen las dos salas')
+
+    // Salir de la sala nueva (borrando su historial)
+    await rail(beto).nth(1).click({ button: 'right' })
+    await beto.page.locator('.ctx-item', { hasText: 'Salir de la sala' }).click()
+    await beto.page.locator('label.check input').check()
+    await beto.page.locator('.modal .btn.danger').click()
+    await waitFor(async () => (await rail(beto).count()) === 1, 15000, 'queda una sala')
+    await beto.page.waitForSelector('.sb-header', { timeout: 20000 })
+    if (!(await texts(beto)).some((t) => t.includes('mensaje de la sala vieja'))) throw new Error('debería quedar en la sala vieja con su historial')
+    ok('salir de una sala (borrando su historial) deja la otra intacta')
+
+    // Actualizar desde una versión anterior: historial en data/, llave en group.key y sin rooms.json
+    const prev = await launch(net, 'Dani'); apps.push(prev) // con la llave por entorno, como antes de las salas múltiples
+    await say(prev, 'historial de antes de actualizar')
+    await waitFor(async () => (await texts(prev)).some((t) => t.includes('historial de antes')), 10000, 'se guarda')
+    await prev.app.close()
+    fs.writeFileSync(path.join(prev.profile, 'group.key'), net.key + '\n') // el formato de llave de antes
+    const logAntes = fs.readFileSync(path.join(prev.profile, 'data', 'log', 'events.jsonl'), 'utf8')
+    const upd = await launch(net, 'Dani', { profile: prev.profile, noKey: true }); apps.push(upd)
+    await waitFor(async () => (await texts(upd)).some((t) => t.includes('historial de antes de actualizar')), 15000, 'el historial de antes sigue ahí')
+    const reg = JSON.parse(fs.readFileSync(path.join(prev.profile, 'rooms.json'), 'utf8'))
+    if (reg.rooms.length !== 1 || reg.rooms[0].dir !== 'data') throw new Error('la sala de antes debería conservar su carpeta data: ' + JSON.stringify(reg.rooms))
+    if (!fs.readFileSync(path.join(prev.profile, 'data', 'log', 'events.jsonl'), 'utf8').startsWith(logAntes)) throw new Error('el historial de antes se alteró')
+    ok('actualizar desde una versión anterior: la sala de siempre conserva su historial sin moverlo')
+  } catch (e) {
+    await capturarFallo('e2e2-salas')
+    throw e
+  } finally {
+    await close()
+    await net.testnet.destroy().catch(() => {})
+  }
+}
+
 /** Voz y cámara sin ningún candidato real de WebRTC: solo el túnel por la red P2P (también se ejecuta en Windows). */
 async function tunel() {
   const apps = []
@@ -381,6 +476,7 @@ async function tunel() {
   if (!only || only === 'contenido') await content()
   if (!only || only === 'sistema') await sistema()
   if (!only || only === 'tunel') await tunel()
+  if (!only || only === 'salas') await salas()
   console.log(`\n${passed} comprobaciones OK`)
   process.exit(0)
 })().catch((e) => { console.error('\n✘', e); process.exit(1) })
