@@ -9,6 +9,8 @@ const { checkNat, EXPLAIN } = require('../core/natcheck')
 const { createSettings } = require('./settings')
 const { startUpdates } = require('./updates')
 const { UdpTunnels } = require('./udptunnel')
+const { RoomStore } = require('./rooms')
+const { RoomHub } = require('./roomhub')
 const { trayHostAvailable, createTray } = require('./tray')
 const ptt = require('./ptt')
 const { loadNetwork } = require('../core/network')
@@ -55,6 +57,10 @@ process.on('unhandledRejection', (e) => console.error('[humblechat] unhandledRej
 
 let win = null
 let node = null
+const RELEASES_URL = (() => { // página de descargas del proyecto, para el aviso de invitar a un amigo
+  const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(require('../../package.json').repository?.url || '')
+  return m ? `https://github.com/${m[1]}/releases/latest` : null
+})()
 let tunnels = null
 let rendererReady = false
 let quitting = false
@@ -88,36 +94,37 @@ const MIME = {
   '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json'
 }
 
-// ───────────── Llave del grupo y nodo P2P ─────────────
+// ───────────── Salas y nodos P2P ─────────────
+// Cada sala tiene su nodo (su red y su historial) y todos están conectados a la vez; la interfaz enseña la activa.
 const userKeyFile = () => path.join(app.getPath('userData'), 'group.key')
-
-function saveKey(key) {
-  fs.mkdirSync(app.getPath('userData'), { recursive: true })
-  fs.writeFileSync(userKeyFile(), key + '\n', { mode: 0o600 })
-}
+let rooms = null // RoomStore: lista de salas (rooms.json)
+let hub = null // RoomHub: los nodos de las salas
 
 /**
- * Llave de la sala: variable de entorno > datos del usuario > la que trae la aplicación (se copia a los datos
- * del usuario, así sobrevive a las actualizaciones, que no la incluyen) > desarrollo: se crea una.
- * Devuelve null si no hay ninguna: entonces se pide el código de sala al usuario.
+ * Prepara la lista de salas. Con HUMBLECHAT_KEY hay una sola, fijada. Si aún no hay ninguna, se adopta la llave de antes de
+ * las salas múltiples (datos del usuario > la que trae la aplicación > en desarrollo, una nueva) y su historial se queda donde
+ * estaba; si no hay ninguna, se pedirá el código de sala al usuario.
  */
-function resolveKey() {
+function openRooms() {
+  const env = process.env.HUMBLECHAT_KEY ? process.env.HUMBLECHAT_KEY.trim() : null
+  rooms = new RoomStore(app.getPath('userData'), { fixedKey: env, defaultName: SERVER_NAME })
+  if (env || rooms.list().length) return
   const found = findGroupKey({
     userDataDir: app.getPath('userData'),
     resourcesDir: app.isPackaged ? process.resourcesPath : null,
     repoRoot: app.isPackaged || process.env.HUMBLECHAT_NO_AUTOKEY ? null : ROOT // NO_AUTOKEY: solo pruebas
   })
-  if (found) {
-    if (found.source !== 'env' && found.source !== userKeyFile()) saveKey(found.key)
-    return found.key
-  }
+  if (found) { rooms.add(found.key, { adoptLegacy: true }); return }
   if (!app.isPackaged && !process.env.HUMBLECHAT_NO_AUTOKEY) {
     const key = generateKey()
     fs.writeFileSync(path.join(ROOT, 'group.key'), key + '\n', { mode: 0o600 })
-    saveKey(key)
-    return key
+    rooms.add(key, { adoptLegacy: true })
   }
-  return null
+}
+
+/** Al salir de una sala, su llave del formato antiguo (group.key) no debe resucitarla en el próximo arranque. */
+function forgetLegacyKeyFile(key) {
+  try { if (fs.readFileSync(userKeyFile(), 'utf8').trim() === key) fs.rmSync(userKeyFile(), { force: true }) } catch {}
 }
 
 let network = null
@@ -130,47 +137,71 @@ function readNetwork() {
   })
 }
 
-async function startNode(key) {
+/** Nodo de una sala (sin arrancar). Solo la sala activa envía sus eventos a la interfaz. */
+function createRoomNode(room) {
   readNetwork()
-  currentKey = key
   let { bootstrap } = network
   let dhtOpts = {}
   if (process.env.HUMBLECHAT_BOOTSTRAP) { // solo pruebas: DHT local en vez de la pública
     bootstrap = [process.env.HUMBLECHAT_BOOTSTRAP]
     dhtOpts = { host: process.env.HUMBLECHAT_DHT_HOST || '127.0.0.1' } // DHT_HOST: pruebas con espacios de red (NAT simulado)
   }
-  node = new ChatNode({ dir: path.join(app.getPath('userData'), 'data'), groupKey: key, bootstrap, dhtOpts, appVersion: app.getVersion() })
-  tunnels = new UdpTunnels(node)
-  if (process.env.HUMBLECHAT_NET_DEBUG) globalThis.__hcNode = node // solo diagnóstico de pruebas (test/lib.js lo lee con app.evaluate)
+  const n = new ChatNode({ dir: rooms.dirOf(room), identityDir: rooms.identityDir, groupKey: room.key, bootstrap, dhtOpts, appVersion: app.getVersion() })
+  const active = () => hub?.node === n
   // Los eventos se agrupan en lotes de 40 ms: al sincronizar un historial largo no se satura la interfaz.
   let batch = []
-  node.on('event', (ev) => {
+  n.on('event', (ev) => {
+    if (!active()) return
     batch.push(ev)
     if (batch.length === 1) setTimeout(flushEvents, 40)
   })
   function flushEvents() {
     const list = batch
     batch = []
+    if (!active()) return
     const evs = []
     const touched = new Set() // mensajes cuya edición/reacciones/fijado/vista previa han cambiado
     let channelsChanged = false
     for (const ev of list) {
-      if (ev.t === 'msg') evs.push(node.store.decorate(ev))
-      else if (ev.t === 'dm') { const d = node.openDm(ev); if (d) evs.push(d) } // solo los que son para nosotros, ya descifrados
+      if (ev.t === 'msg') evs.push(n.store.decorate(ev))
+      else if (ev.t === 'dm') { const d = n.openDm(ev); if (d) evs.push(d) } // solo los que son para nosotros, ya descifrados
       else if (ev.t === 'edit' || ev.t === 'react' || ev.t === 'pin' || ev.t === 'emb') touched.add(ev.x)
       else if (ev.t === 'chan') channelsChanged = true
       else evs.push(ev)
     }
-    if (channelsChanged) send('channels', { channels: node.store.channels() })
+    if (channelsChanged) send('channels', { channels: n.store.channels() })
     const fresh = new Set(evs.filter((e) => e.t === 'msg').map((e) => `${e.a}:${e.n}`))
-    const updates = [...touched].filter((id) => !fresh.has(id)).map((id) => node.store.message(id)).filter(Boolean)
+    const updates = [...touched].filter((id) => !fresh.has(id)).map((id) => n.store.message(id)).filter(Boolean)
     send('events', { evs, updates })
   }
-  node.on('typing', (id, ch) => send('typing', { id, ch }))
-  node.on('members', (members) => send('members', { members }))
-  node.on('status', (status) => send('status', { status }))
-  node.on('signal', (from, data) => send('signal', { from, data }))
-  await node.start()
+  n.on('typing', (id, ch) => active() && send('typing', { id, ch }))
+  n.on('members', (members) => active() && send('members', { members }))
+  n.on('status', (status) => active() && send('status', { status }))
+  n.on('signal', (from, data) => active() && send('signal', { from, data }))
+  return n
+}
+
+function openHub() {
+  hub = new RoomHub({
+    store: rooms,
+    createNode: createRoomNode,
+    createTunnels: (n) => new UdpTunnels(n),
+    onActivate: (entry) => {
+      node = entry?.node ?? null
+      tunnels = entry?.tunnels ?? null
+      currentKey = entry?.room.key ?? null
+      if (process.env.HUMBLECHAT_NET_DEBUG) globalThis.__hcNode = node // solo diagnóstico de pruebas (test/lib.js lo lee con app.evaluate)
+    },
+    onChange: () => send('rooms', roomsPayload())
+  })
+}
+
+const roomsPayload = () => ({ rooms: hub ? hub.list() : [], locked: !!rooms?.locked })
+
+/** Tras cambiar de sala se recarga la interfaz: lo que enseña sale entero del nodo de la sala activa. */
+function reloadUi() {
+  rendererReady = false
+  if (win && !win.isDestroyed()) win.loadURL(`humble://app/${hub?.node ? 'index' : 'setup'}.html?platform=${process.platform}`)
 }
 
 /** Vista previa del primer enlace de un mensaje propio: se pide desde aquí (nunca desde los demás) y se reparte firmada. */
@@ -341,14 +372,17 @@ function setupIpc() {
     rendererReady = true
     return {
       ...node.snapshot(),
-      server: SERVER_NAME,
+      server: hub.room?.name || SERVER_NAME,
+      rooms: roomsPayload().rooms,
+      roomsLocked: !!rooms.locked,
       limits: { blob: LIMITS.blob, autoBlob: LIMITS.autoBlob, avatar: LIMITS.avatar, attachments: LIMITS.attachments, text: LIMITS.text, name: LIMITS.name, channelName: LIMITS.channelName },
       iceServers: network.iceServers,
       platform: process.env.HUMBLECHAT_FAKE_PLATFORM || process.platform, // solo pruebas: ver la barra de título de Windows
       pickerNeeded: !IS_WAYLAND, // en Wayland ya pregunta el portal del sistema
       settings: settings.all(),
       version: app.getVersion(),
-      room: { fingerprint: fingerprint(currentKey) }
+      releasesUrl: RELEASES_URL,
+      room: { id: hub.room?.id, fingerprint: fingerprint(currentKey) }
     }
   })
   handle('history', (_e, ch, opts) => {
@@ -368,14 +402,16 @@ function setupIpc() {
   handle('channel:create', (_e, kind, name) => node.createChannel(kind === 'voice' ? 'voice' : 'text', name))
   handle('channel:rename', (_e, id, name) => node.renameChannel(String(id), name))
   handle('channel:delete', (_e, id) => node.deleteChannel(String(id)))
-  handle('avatar:set', (_e, data) => node.setAvatar(data ? Buffer.from(data) : null))
+  // Tu nombre y tu avatar son los mismos en todas las salas: el de la activa responde, las demás se ponen al día
+  const inAllRooms = (fn) => { const out = fn(node); for (const e of hub.all()) if (e.node !== node) { try { fn(e.node) } catch {} } return out }
+  handle('avatar:set', (_e, data) => { const bytes = data ? Buffer.from(data) : null; return inAllRooms((n) => n.setAvatar(bytes)) })
   handle('blob:fetch', (_e, hash) => /^[0-9a-f]{64}$/.test(hash) ? node.whenBlob(hash, 10 * 60 * 1000).then(() => true) : false)
   handle('blob:progress', (_e, hash) => (/^[0-9a-f]{64}$/.test(hash) ? node.blobProgress(hash) : { done: false, got: 0, total: 0 }))
   handle('edit', (_e, id, text) => node.edit(id, text))
   handle('react', (_e, id, emoji, on) => node.react(id, emoji, on))
   handle('typing', (_e, ch) => node.typing(ch))
   handle('remove', (_e, id) => node.remove(id))
-  handle('setName', (_e, name) => node.setName(name))
+  handle('setName', (_e, name) => inAllRooms((n) => n.setName(name)))
   handle('setVoice', (_e, v) => node.setVoice(v))
   handle('signal', (_e, to, data) => node.signal(to, data))
   // Túnel UDP de respaldo para WebRTC (ver udptunnel.js): solo con amigos de conexión directa
@@ -417,15 +453,41 @@ function setupIpc() {
   }))
   handle('openExternal', (_e, url) => openExternal(url))
 
-  // ── Sala (llave del grupo) ──
-  handle('room:info', () => ({ code: currentKey ? formatCode(currentKey) : null, fingerprint: currentKey ? fingerprint(currentKey) : null, envKey: !!process.env.HUMBLECHAT_KEY }))
-  handle('room:join', async (_e, text) => {
+  // ── Salas ──
+  const BAD_CODE = 'Ese código no es válido. Tiene que ser el que te pasó tu amigo (64 letras y números).'
+  const roomOf = (id) => { const r = typeof id === 'string' ? rooms.get(id) : null; if (!r) throw new Error('Esa sala no existe.'); return r }
+  handle('room:info', () => ({
+    id: hub.room?.id ?? null, name: hub.room?.name ?? null,
+    code: currentKey ? formatCode(currentKey) : null, fingerprint: currentKey ? fingerprint(currentKey) : null,
+    envKey: !!rooms.locked
+  }))
+  handle('room:create', () => formatCode(generateKey())) // solo genera: el usuario lo copia y luego "entra" con rooms:add
+  handle('rooms:list', () => roomsPayload())
+  handle('rooms:add', async (_e, text, name) => { // entrar con un código (o con el que acaba de generar el propio usuario)
     const key = parseCode(text)
-    if (!key) throw new Error('Ese código no es válido. Tiene que ser el que te pasó tu amigo (64 letras y números).')
-    await switchRoom(key)
+    if (!key) throw new Error(BAD_CODE)
+    await hub.add(key, { name: typeof name === 'string' ? name : undefined })
+    reloadUi()
     return true
   })
-  handle('room:create', () => formatCode(generateKey())) // solo genera: el usuario lo copia y luego "entra" con room:join
+  handle('room:join', async (_e, text) => { // pantalla de bienvenida: la primera sala
+    const key = parseCode(text)
+    if (!key) throw new Error(BAD_CODE)
+    await hub.add(key)
+    reloadUi()
+    return true
+  })
+  handle('rooms:switch', (_e, id) => { roomOf(id); if (id !== hub.room?.id) { hub.switchTo(id); reloadUi() } return true })
+  handle('rooms:rename', (_e, id, name) => hub.rename(roomOf(id).id, name))
+  handle('rooms:code', (_e, id) => formatCode(roomOf(id).key))
+  handle('rooms:leave', async (_e, id, deleteData) => {
+    const r = roomOf(id)
+    const wasActive = hub.room?.id === id
+    await hub.leave(id, { deleteData: !!deleteData })
+    forgetLegacyKeyFile(r.key)
+    if (wasActive) reloadUi()
+    return true
+  })
 
   // ── Preferencias de la aplicación ──
   handle('settings:set', async (_e, patch) => {
@@ -445,17 +507,6 @@ function setupIpc() {
   handle('update:state', () => { rendererReady = true; return updates?.state() ?? null }) // la pantalla de bloqueo no llama a 'init'
   handle('update:recheck', () => updates?.recheck())
   handle('app:quit', () => { forceClose = true; app.quit() })
-}
-
-/** Cambiar de sala sin reiniciar: se guarda la llave, se arranca la red de nuevo y se recarga la interfaz. */
-async function switchRoom(key) {
-  if (process.env.HUMBLECHAT_KEY) throw new Error('La llave está fijada por la variable HUMBLECHAT_KEY.')
-  saveKey(key)
-  tunnels?.closeAll(); tunnels = null
-  if (node) { await node.stop().catch(() => {}); node = null }
-  rendererReady = false
-  await startNode(key)
-  if (win && !win.isDestroyed()) win.loadURL(`humble://app/index.html?platform=${process.platform}`)
 }
 
 // ───────────── Integración con el sistema: bandeja, inicio automático, insignia ─────────────
@@ -505,12 +556,12 @@ app.on('second-instance', showWindow)
 app.on('activate', showWindow)
 
 app.on('before-quit', (e) => {
-  if (quitting || !node) return
+  if (quitting || !hub?.all().length) return
   e.preventDefault()
   quitting = true
   updates?.stop()
   const done = () => app.exit(0)
-  node.stop().then(done, done)
+  hub.stopAll().then(done, done)
   setTimeout(done, 2500).unref?.() // no te quedes colgado si la red no responde
 })
 
@@ -526,7 +577,7 @@ app.whenReady().then(async () => {
     send,
     settings,
     onForced: () => { gateMode = true },
-    stopNetwork: async () => { const n = node; node = null; tunnels?.closeAll(); tunnels = null; await n?.stop().catch(() => {}) }
+    stopNetwork: async () => { await hub?.stopAll() }
   })
   // Antes de tocar la red: si esta versión ya no es la última, no se arranca nada más (ni nodo, ni bandeja, ni teclas).
   const gate = await updates.gateAtStartup()
@@ -534,12 +585,13 @@ app.whenReady().then(async () => {
   readNetwork()
   ptt.init(send)
   trayOk = await trayHostAvailable()
-  const key = resolveKey()
-  if (key) await startNode(key)
-  powerMonitor.on('suspend', () => node?.suspend())
-  powerMonitor.on('resume', () => node?.resume())
+  openRooms()
+  openHub()
+  await hub.startAll()
+  powerMonitor.on('suspend', () => hub.all().forEach((e) => e.node.suspend()))
+  powerMonitor.on('resume', () => hub.all().forEach((e) => e.node.resume()))
   await applyTray()
-  createWindow(key ? 'index' : 'setup')
+  createWindow(hub.node ? 'index' : 'setup')
   applyAutostart(settings.get('autostart'))
   updates.beginPeriodic()
 })

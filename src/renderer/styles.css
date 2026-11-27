@@ -613,3 +613,26 @@ video { pointer-events: none; }
 .theater-wait p { margin: 0; max-width: 360px; font-size: 14px; line-height: 1.4; }
 .theater-wait b { color: var(--text-head); font-size: 16px; }
 .tile video.cam.wait { visibility: hidden; }
+
+/* Los botones no parten su texto en dos líneas ni se aplastan en las filas de ajustes */
+.btn, button.btn { white-space: nowrap; }
+.sw-row > .btn, .sw-row > button { flex: none; }
+.sw-row > div:first-child { min-width: 0; flex: 1; }
+
+/* ───────── Salas (barra de la izquierda) ───────── */
+.rail { overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+.rail-item { cursor: pointer; flex: none; }
+.rail-item:not(.active) .rail-icon { border-radius: 50%; opacity: .92; }
+.rail-item:not(.active):hover .rail-icon { border-radius: 16px; opacity: 1; }
+.rail-item:not(.active) .rail-pill { height: 8px; margin-top: -4px; opacity: 0; transition: opacity .12s, height .12s, margin-top .12s; }
+.rail-item:not(.active):hover .rail-pill { opacity: 1; height: 20px; margin-top: -10px; }
+.rail-item.unread .rail-pill { opacity: 1; }
+.rail-badge { position: absolute; right: 12px; bottom: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; border: 3px solid var(--bg-rail); box-sizing: content-box; }
+.rail-add { width: 48px; height: 48px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--bg-main); color: var(--green); transition: border-radius .15s, background .15s, color .15s; }
+.rail-add:hover { border-radius: 16px; background: var(--green); color: #fff; }
+label.check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); cursor: pointer; }
+label.check input { width: 16px; height: 16px; accent-color: var(--brand); }
+
+/* Los textos de ayuda dentro de un campo no heredan las mayúsculas y la negrita de su etiqueta */
+.field p.muted, .field .muted { text-transform: none; font-weight: 400; letter-spacing: normal; }
+.field .code-box, .field .code-box code { text-transform: none; font-weight: 400; }
