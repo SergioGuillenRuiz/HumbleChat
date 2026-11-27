@@ -163,3 +163,15 @@ test('los amigos con conexión directa no se tratan como indirectos y no hay pre
   await until(() => got.length === 1, 5000, 'señal directa')
   assert.deepEqual(got[0], [a.id, { sdp: 'directa' }])
 })
+
+test('cada amigo informa de la versión de su aplicación (para diagnosticar versiones antiguas)', async () => {
+  const K = key()
+  const mk = async (appVersion) => {
+    const n = new ChatNode({ dir: tmp(), groupKey: K, dht: testnet.createNode(), appVersion })
+    await n.start(); nodes.push(n); return n
+  }
+  const [a, b] = [await mk('0.2.2'), await mk('')] // b es de una versión que aún no informaba
+  await until(() => a.peers.size === 1 && b.peers.size === 1, 20000, 'conectados')
+  assert.equal(a.diagnostics().peers[0].app, null, 'una versión que no informa aparece como desconocida')
+  assert.equal(b.diagnostics().peers[0].app, '0.2.2')
+})

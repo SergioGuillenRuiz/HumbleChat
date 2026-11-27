@@ -107,8 +107,9 @@ class ChatNode extends EventEmitter {
    * @param {object} [o.dhtOpts]  opciones extra para la DHT (solo tests: host 127.0.0.1)
    * @param {object} [o.relay]    tiempos del relé de presencia y señales (solo tests)
    */
-  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {} }) {
+  constructor({ dir, groupKey, bootstrap = undefined, dht = undefined, dhtOpts = {}, relay = {}, appVersion = '' }) {
     super()
+    this.appVersion = String(appVersion || '').slice(0, 20)
     this.dir = dir
     this.groupKey = groupKey
     this.bootstrap = bootstrap
@@ -286,7 +287,7 @@ class ChatNode extends EventEmitter {
     }
     return {
       status: this.status(),
-      peers: [...this.peers.values()].map((p) => ({ name: this.store.names.get(p.id)?.name || p.name || p.id.slice(0, 6), link: link(p) }))
+      peers: [...this.peers.values()].map((p) => ({ name: this.store.names.get(p.id)?.name || p.name || p.id.slice(0, 6), link: link(p), app: p.app || null }))
     }
   }
 
@@ -482,6 +483,7 @@ class ChatNode extends EventEmitter {
       v: PROTOCOL,
       proof: proofOf(this.groupKey, conn.handshakeHash),
       name: this.name,
+      app: this.appVersion, // versión de la aplicación (solo informativa: sirve para diagnosticar amigos con versión antigua)
       voice: this.voice
     })
   }
@@ -514,6 +516,7 @@ class ChatNode extends EventEmitter {
       }
       peer.ready = true
       peer.name = typeof m.name === 'string' ? m.name.slice(0, LIMITS.name) : null
+      peer.app = typeof m.app === 'string' && /^[0-9A-Za-z.+-]{1,20}$/.test(m.app) ? m.app : null
       peer.voice = cleanVoice(m.voice)
       const old = this.peers.get(peer.id)
       this.peers.set(peer.id, peer)

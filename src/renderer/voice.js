@@ -616,6 +616,15 @@ class Link {
       const viaTunnel = [byId.get(pair.remoteCandidateId), byId.get(pair.localCandidateId)].some((c) => (c?.address || c?.ip) === '127.0.0.1')
       if (!this.relayedBy) out.path = viaTunnel ? 'por túnel de la red P2P' : types.includes('relay') ? 'por relé TURN' : types.every((t) => t === 'host') ? 'red local' : 'directa (atravesando NAT)'
     }
+    // Datos para saber POR QUÉ no conecta: estado de ICE, candidatos propios por tipo y pares probados
+    const cand = {}
+    const pairs = { inProgress: 0, succeeded: 0, failed: 0, waiting: 0 }
+    st.forEach((r) => {
+      if (r.type === 'local-candidate') cand[r.candidateType] = (cand[r.candidateType] || 0) + 1
+      else if (r.type === 'candidate-pair') pairs[r.state] = (pairs[r.state] || 0) + 1
+    })
+    out.ice = { state: this.pc.iceConnectionState, gathering: this.pc.iceGatheringState, cand, pairs }
+    out.tunnel = this.tunnel ? (await window.humble.tunnelStats(this.id).catch(() => null)) || { tx: 0, rx: 0, drops: 0 } : null
     const prev = this.prev || {}
     const cur = {}
     const best = {}
