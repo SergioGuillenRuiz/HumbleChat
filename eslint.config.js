@@ -24,7 +24,7 @@ module.exports = [
     languageOptions: { ...base, sourceType: 'module', globals: { ...globals.browser, hc: 'readonly' } },
   },
   {
-    files: ['src/main/player/**/*.js'], // se ejecutan dentro de la ventana oculta del reproductor (navegador), no en Node
+    files: ['src/main/player/**/*.js', 'src/main/watch-preload.js'], // se ejecutan dentro de la ventana oculta del reproductor (navegador), no en Node
     languageOptions: { ...base, sourceType: 'script', globals: { ...globals.browser } },
   },
   {

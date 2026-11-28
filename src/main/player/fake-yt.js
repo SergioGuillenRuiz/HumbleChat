@@ -51,6 +51,7 @@
     getCurrentTime() { return this.state === 1 ? Math.min(this.base + (Date.now() - this.since) / 1000, this.getDuration()) : this.base }
     getDuration() { return this.v ? DURATION(this.v) : 0 }
     getPlayerState() { return this.state }
+    getVideoData() { return { video_id: this.v } }
     setVolume(v) { this.vol = v }
     getVolume() { return this.vol }
     mute() { this.muted = true }

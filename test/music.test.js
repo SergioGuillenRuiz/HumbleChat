@@ -27,6 +27,41 @@ test('parseYouTube entiende los enlaces habituales y rechaza el resto', async ()
   ]) assert.equal(parseYouTube(u), null, String(u))
 })
 
+test('listas de reproducción y enlaces: se distinguen de un vídeo y de unas palabras', async () => {
+  const { parseYouTubeList, looksLikeLink, parseYouTube } = await load()
+  const L = 'PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI'
+  assert.equal(parseYouTubeList('https://www.youtube.com/playlist?list=' + L), L)
+  assert.equal(parseYouTubeList('youtube.com/playlist?list=' + L + '&si=x'), L)
+  assert.equal(parseYouTubeList('https://music.youtube.com/playlist?list=' + L), L)
+  // un vídeo que viene de una lista sigue siendo un vídeo
+  assert.equal(parseYouTubeList('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=' + L), null)
+  assert.equal(parseYouTube('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=' + L), 'dQw4w9WgXcQ')
+  for (const bad of ['', 'hola', 'https://evil.com/playlist?list=' + L, 'https://www.youtube.com/playlist', 'https://www.youtube.com/playlist?list=corta', 'javascript:alert(1)', null]) assert.equal(parseYouTubeList(bad), null, String(bad))
+  for (const yes of ['https://youtu.be/x', 'www.youtube.com/watch?v=1', 'youtube.com/playlist?list=a', 'ejemplo.com/hola', 'http://x.y']) assert.ok(looksLikeLink(yes), yes)
+  for (const no of ['me at the zoo', 'bohemian rhapsody', 'AC/DC thunderstruck', 'queen', '', 'rock 80s']) assert.ok(!looksLikeLink(no), no)
+})
+
+test('varias canciones a la vez: entran las que caben y arranca la primera si no sonaba nada', async () => {
+  const m = await load()
+  const t = (k) => track(V1, 'p' + String(k).padStart(3, '0'))
+  let r = m.addTracks(m.emptyState(), [t(1), t(2), t(3)], A)
+  assert.equal(r.added, 3)
+  assert.deepEqual([m.current(r.state).n, r.state.play, r.state.rev], ['p001', true, 1])
+  // con algo sonando, se ponen al final sin interrumpir
+  r = m.addTracks(r.state, [t(4), t(5)], B)
+  assert.deepEqual([m.current(r.state).n, r.state.q.length, r.state.rev, r.state.by], ['p001', 5, 2, B])
+  // solo caben las que quedan; con la cola llena no cambia nada
+  const casi = { ...r.state, q: Array.from({ length: 48 }, (_, k) => t(100 + k)) }
+  assert.equal(m.addTracks(casi, [t(7), t(8), t(9)], A).added, 2)
+  const lleno = { ...r.state, q: Array.from({ length: 50 }, (_, k) => t(200 + k)) }
+  const nada = m.addTracks(lleno, [t(1)], A)
+  assert.deepEqual([nada.added, nada.state === lleno], [0, true])
+  // con la cola agotada, empieza por la primera de las nuevas
+  const fin = m.next(m.addTrack(m.emptyState(), t(1), A), A)
+  const r2 = m.addTracks(fin, [t(2), t(3)], A)
+  assert.deepEqual([m.current(r2.state).n, r2.state.play], ['p002', true])
+})
+
 test('fmtTime', async () => {
   const { fmtTime } = await load()
   assert.equal(fmtTime(0), '0:00')
@@ -287,6 +322,10 @@ test('plan: qué le dice el estado al reproductor local', async () => {
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40 } }), [{ op: 'seek', pos: 15 }])
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 13 } }), [])
   assert.deepEqual(m.plan({ ...base, lastSeekAt: 3000, player: { n: 'n001', st: 'playing', pos: 40 } }), [])
+  // suena otro vídeo (un anuncio): no se le pide nada aunque el desvío sea enorme
+  assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40, vid: 'anuncio0001' } }), [])
+  assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'buffering', pos: 0, vid: V1, ad: true } }), [], 'durante un anuncio no se toca nada')
+  assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'playing', pos: 40, vid: V1 } }), [{ op: 'seek', pos: 15 }])
   // cargando o con error: no se le pide nada
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'loading', pos: 0 } }), [])
   assert.deepEqual(m.plan({ ...base, player: { n: 'n001', st: 'error', pos: 0 } }), [])
@@ -379,8 +418,9 @@ test('el proceso principal solo acepta órdenes y eventos con la forma exacta', 
   for (const op of ['play', 'pause', 'stop']) assert.deepEqual(cleanCommand({ op, junk: 1 }), { op })
   for (const bad of [null, undefined, 'load', {}, { op: 'eval' }, { op: 'navigate', url: 'file:///etc/passwd' }]) assert.equal(cleanCommand(bad), null)
 
-  assert.deepEqual(cleanEvent({ e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, otra: 1 }), { e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212 })
-  assert.deepEqual(cleanEvent({ e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 }), { e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 })
+  assert.deepEqual(cleanEvent({ e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, vid: 'dQw4w9WgXcQ', otra: 1 }), { e: 'tick', n: 'abcd1234', st: 'playing', pos: 3.5, dur: 212, ad: false, vid: 'dQw4w9WgXcQ' })
+  assert.equal(cleanEvent({ e: 'tick', vid: '<script>' }).vid, null)
+  assert.deepEqual(cleanEvent({ e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, code: 150 }), { e: 'error', n: 'abcd1234', st: 'error', pos: 0, dur: 0, ad: false, vid: null, code: 150 })
   assert.equal(cleanEvent({ e: 'state', n: 'no valido!', st: 'rarísimo', pos: NaN, dur: 'x' }).st, 'none')
   assert.equal(cleanEvent({ e: 'state', n: 'no valido!', st: 'x', pos: NaN, dur: 'x' }).n, null)
   assert.equal(cleanEvent({ e: 'state', st: 'playing', pos: Infinity }).pos, 0)
@@ -397,4 +437,81 @@ test('el estado más grande posible cabe holgado en el límite de 64 KB de una s
   assert.ok(s, 'el estado máximo es válido')
   const tam = JSON.stringify({ k: 'mus', d: { t: 'st', s } }).length
   assert.ok(tam < 32 * 1024, 'ocupa ' + tam + ' caracteres')
+})
+
+// ───────────── Búsqueda y listas (páginas de YouTube sintéticas; la real la mira la sonda «YouTube real») ─────────────
+
+const { searchVideos, playlistVideos, SearchError, balancedJson, initialData, parseDuration } = require('../src/main/ytsearch')
+const page = (data, pre = '') => `<html><head>${pre}</head><body><script nonce="x">var ytInitialData = ${JSON.stringify(data)};</script><script>window.other = {"a":1};</script></body></html>`
+const web = (html, status = 200) => async () => ({ ok: status < 300, status, text: async () => html })
+const run = (t, a = 'Canal') => ({ runs: [{ text: t }] })
+const video = (id, t, d) => ({ videoRenderer: { videoId: id, title: run(t), ownerText: run('Canal de ' + t), lengthText: { simpleText: d } } })
+const lockup = (id, t, d) => ({
+  lockupViewModel: {
+    contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: id,
+    metadata: { lockupMetadataViewModel: { title: { content: t }, metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: 'Autor de ' + t } }] }] } } } },
+    contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { badges: [{ thumbnailBadgeViewModel: { text: d } }] } }] } }
+  }
+})
+const results = (...items) => ({ contents: { twoColumnSearchResultsRenderer: { primaryContents: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: items } }] } } } } })
+
+test('duraciones y JSON con llaves dentro de las cadenas', () => {
+  assert.equal(parseDuration('3:33'), 213)
+  assert.equal(parseDuration('1:02:05'), 3725)
+  assert.equal(parseDuration('en directo'), 0)
+  assert.equal(parseDuration(undefined), 0)
+  const html = 'x = {"a":"} {","b":{"c":[1,2,{"d":"\\"}"}]}}; y = {"z":1}'
+  assert.deepEqual(balancedJson(html, html.indexOf('{')), { a: '} {', b: { c: [1, 2, { d: '"}' }] } })
+  assert.equal(balancedJson('{"a":1', 0), null)
+})
+
+test('búsqueda: lee las dos maquetas de YouTube, sin repetir ni inventar', async () => {
+  const data = results(
+    video('aaaaaaaaaaa', 'Primera  canción', '3:33'),
+    lockup('bbbbbbbbbbb', 'Segunda (maqueta nueva)', '1:02:05'),
+    video('aaaaaaaaaaa', 'Primera repetida', '3:33'), // repetido: se descarta
+    { videoRenderer: { videoId: 'corto', title: run('id malo') } }, // identificador inválido
+    { videoRenderer: { videoId: 'ccccccccccc' } }, // sin título
+    { channelRenderer: { channelId: 'UC123' } }, // no es un vídeo
+    { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST', contentId: 'PLxxxxxxxxxxxxxxxx' } },
+    video('ddddddddddd', 'x'.repeat(300), '0:59')
+  )
+  const r = await searchVideos('  una   búsqueda ', web(page(data)))
+  assert.deepEqual(r.map((x) => x.v), ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ddddddddddd'])
+  assert.deepEqual(r[0], { v: 'aaaaaaaaaaa', t: 'Primera canción', a: 'Canal de Primera canción', d: 213 })
+  assert.deepEqual([r[1].t, r[1].a, r[1].d], ['Segunda (maqueta nueva)', 'Autor de Segunda (maqueta nueva)', 3725])
+  assert.equal(r[2].t.length, 120)
+  // límite de resultados y la petición lleva solo lo buscado
+  let url = null
+  const muchos = results(...Array.from({ length: 30 }, (_, k) => video(String(k).padStart(11, 'v'), 'Título ' + k, '2:00')))
+  const r2 = await searchVideos('rock', async (u, o) => { url = u; return web(page(muchos))(u, o) }, { limit: 5 })
+  assert.equal(r2.length, 5)
+  assert.match(url, /^https:\/\/www\.youtube\.com\/results\?.*search_query=rock$/)
+  assert.match(url, /sp=EgIQAQ%253D%253D/)
+})
+
+test('búsqueda: errores claros cuando YouTube cambia, pide cookies o no responde', async () => {
+  const msg = async (p) => p.then(() => null, (e) => (e instanceof SearchError ? e.message : 'OTRO: ' + e.message))
+  assert.match(await msg(searchVideos('', web(''))), /Escribe algo/)
+  assert.match(await msg(searchVideos('rock', web('<html>nada</html>'))), /ha cambiado su página/)
+  assert.match(await msg(searchVideos('rock', web('<html><a href="https://consent.youtube.com/m">Antes de continuar</a></html>'))), /cookies/)
+  assert.match(await msg(searchVideos('rock', web(page(results())))), /No hay resultados para «rock»/)
+  assert.match(await msg(searchVideos('rock', web('', 429))), /respondió 429/)
+  assert.match(await msg(searchVideos('rock', async () => { throw new Error('ECONNRESET') })), /no se pudo conectar/)
+  assert.match(await msg(searchVideos('rock', web('<script>var ytInitialData = {"roto": </script>'))), /ha cambiado su página/)
+  assert.match(await msg(searchVideos('rock', web('a'.repeat(7 * 1024 * 1024)))), /demasiado grande/)
+  assert.throws(() => initialData('<html></html>'), SearchError)
+})
+
+test('listas de reproducción: vídeos jugables, hasta el límite, y errores', async () => {
+  const items = [
+    { playlistVideoRenderer: { videoId: 'aaaaaaaaaaa', title: run('Uno'), shortBylineText: run('Autor'), lengthSeconds: '215', isPlayable: true } },
+    { playlistVideoRenderer: { videoId: 'bbbbbbbbbbb', title: run('Borrado'), isPlayable: false } }, // privado o borrado
+    { playlistVideoRenderer: { videoId: 'ccccccccccc', title: run('Tres'), lengthSeconds: '99' } }
+  ]
+  const data = { contents: { twoColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: [{ playlistVideoListRenderer: { contents: items } }] } }] } } } }] } } }
+  const r = await playlistVideos('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI', web(page(data)))
+  assert.deepEqual(r, [{ v: 'aaaaaaaaaaa', t: 'Uno', a: 'Autor', d: 215 }, { v: 'ccccccccccc', t: 'Tres', a: '', d: 99 }])
+  await assert.rejects(playlistVideos('corta', web('')), /no válida/)
+  await assert.rejects(playlistVideos('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI', web(page({ contents: {} }))), /vacía, es privada o no existe/)
 })

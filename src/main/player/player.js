@@ -30,16 +30,17 @@
     let st = 'none'
     let pos = 0
     let dur = 0
+    let vid = null // vídeo que está sonando de verdad: si no es el pedido, es un anuncio
     if (cur.n) {
       st = err !== null ? 'error' : 'loading'
       if (ready && err === null && !loading) {
         try { st = STATES[player.getPlayerState()] || 'loading' } catch {}
       }
       if (ready && !loading) {
-        try { pos = Number(player.getCurrentTime()) || 0; dur = Number(player.getDuration()) || 0 } catch {}
+        try { pos = Number(player.getCurrentTime()) || 0; dur = Number(player.getDuration()) || 0; vid = player.getVideoData?.().video_id || null } catch {}
       }
     }
-    return { n: cur.n, st, pos, dur }
+    return { n: cur.n, st, pos, dur, vid }
   }
 
   const emit = (e, extra = {}) => bridge.emit({ e, ...snapshot(), ...extra })

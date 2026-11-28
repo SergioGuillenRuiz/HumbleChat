@@ -1,0 +1,34 @@
+name: YouTube real
+
+# Vigila la parte frágil de «Escuchar juntos»: la lectura de las páginas de YouTube (título y canal, miniatura, búsqueda por nombre y
+# listas de reproducción). YouTube cambia sin avisar y, si lo hace, esto es lo primero que se rompe: aquí se ve a tiempo.
+#
+# La REPRODUCCIÓN no se prueba aquí: desde la IP de un centro de datos YouTube no deja arrancar muchos vídeos (comprobación
+# anti-robots) y daría falsos fallos. Esa parte se prueba con `npx electron test/youtube.js` en un equipo con una IP normal.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: ['claude/**']
+    paths:
+      - 'test/youtube.js'
+      - 'src/main/ytmeta.js'
+      - 'src/main/ytsearch.js'
+      - '.github/workflows/youtube.yml'
+
+jobs:
+  sonda:
+    name: Lectura de YouTube (título, búsqueda, listas)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: (sudo apt-get update || true) && sudo apt-get install -y xvfb
+      - name: Sonda (solo lo que no depende de la IP)
+        run: xvfb-run -a -s "-screen 0 1280x720x24" npx electron --no-sandbox test/youtube.js --only=meta,busqueda

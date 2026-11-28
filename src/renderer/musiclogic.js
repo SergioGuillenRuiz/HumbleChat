@@ -41,6 +41,21 @@ export function parseYouTube(input) {
   return ID.test(id || '') ? id : null
 }
 
+/** Identificador de una lista de reproducción a partir de un enlace de lista (`/playlist?list=…`). Un enlace de vídeo que además lleva lista es un vídeo. */
+export function parseYouTubeList(input) {
+  const s = String(input ?? '').trim()
+  let u
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : 'https://' + s) } catch { return null }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '')
+  if (host !== 'youtube.com' || u.pathname !== '/playlist') return null
+  const id = u.searchParams.get('list')
+  return /^[\w-]{13,64}$/.test(id || '') ? id : null
+}
+
+/** ¿Parece un enlace (y no unas palabras que buscar)? */
+export const looksLikeLink = (input) => /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.|(?:[\w-]+\.)+[a-z]{2,}(?:[/?#]|$))/i.test(String(input ?? '').trim())
+
 export const watchUrl = (v) => `https://www.youtube.com/watch?v=${v}`
 
 /** 83 → «1:23»; 3725 → «1:02:05». */
@@ -119,6 +134,16 @@ export function addTrack(s, track, me) {
   if (s.q.length >= LIMITS.queue) throw new RangeError(`La cola está llena (máximo ${LIMITS.queue} canciones)`)
   const q = [...s.q, track]
   return has(s) ? bump(s, me, { q }) : bump(s, me, { q, i: q.length - 1, play: true, pos: 0 })
+}
+
+/** Añade varias a la vez (una lista de reproducción): las que quepan. Devuelve el estado nuevo y cuántas entraron. */
+export function addTracks(s, tracks, me) {
+  const room = LIMITS.queue - s.q.length
+  const take = tracks.slice(0, Math.max(0, room))
+  if (!take.length) return { state: s, added: 0 }
+  const q = [...s.q, ...take]
+  const state = has(s) ? bump(s, me, { q }) : bump(s, me, { q, i: s.q.length, play: true, pos: 0 })
+  return { state, added: take.length }
 }
 
 /** Quita una pista. Si era la actual, pasa a sonar la siguiente (o se para si no hay más). */
@@ -217,6 +242,8 @@ export function plan({ state, at, now, listening, player, sent = null, lastSeekA
     return [{ op: 'load', v: cur.v, n: cur.n, pos: want, play: state.play }]
   }
   if (player.st === 'loading' || player.st === 'error') return []
+  // Suena otro vídeo que el pedido: es un anuncio de YouTube. No se toca (cada uno ve los suyos y se corregiría en vano).
+  if (player.ad || (player.vid && player.vid !== cur.v)) return []
   const cmds = []
   const sounding = player.st === 'playing' || player.st === 'buffering'
   if (state.play && player.st === 'paused') cmds.push({ op: 'play' })

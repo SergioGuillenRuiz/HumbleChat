@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('humble', {
   idleSeconds: call('idle:get'),
   musicMeta: call('music:meta'),
   musicThumb: call('music:thumb'),
+  musicSearch: call('music:search'),
+  musicPlaylist: call('music:playlist'),
   musicCmd: call('music:cmd'),
   roomsList: call('rooms:list'),
   roomsAdd: call('rooms:add'),
