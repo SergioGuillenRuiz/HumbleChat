@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Página de vídeo falsa (pruebas)</title>
+</head>
+<body>
+<!--
+  Solo para pruebas (HUMBLECHAT_FAKE_MUSIC=watch): imita lo que usa el motor «watch» de la página de vídeo de YouTube: un
+  `#movie_player` con la API de siempre (getPlayerState, getCurrentTime, seekTo, loadVideoById…), la clase `ad-showing` durante un
+  anuncio, el cartel de error `.ytp-error` y la reproducción automática del siguiente vídeo con su interruptor.
+  La primera letra del identificador decide: A… lleva un anuncio de 4 s · E… no está disponible · el resto, como fake-yt.js.
+-->
+<div id="movie_player">
+  <button class="ytp-autonav-toggle-button" aria-checked="true" style="display:none"></button>
+</div>
+<script src="fake-yt.js"></script>
+<script>
+(() => {
+  const el = document.getElementById('movie_player');
+  const toggle = el.querySelector('.ytp-autonav-toggle-button');
+  toggle.addEventListener('click', () => toggle.setAttribute('aria-checked', toggle.getAttribute('aria-checked') === 'true' ? 'false' : 'true'));
+  const q = new URLSearchParams(location.search);
+  let adUntil = 0;
+  let audio = { vol: 100 };
+  let failed = false;
+  let endedAt = 0;
+
+  const pl = new window.YT.Player('x', { videoId: q.get('v'), playerVars: { start: parseInt(q.get('t') || '0', 10) || 0, autoplay: 1 }, events: {} });
+
+  const arrange = (v) => {
+    failed = v[0] === 'E';
+    adUntil = v[0] === 'A' ? Date.now() + 4000 : 0;
+    el.querySelectorAll('.ytp-error').forEach((x) => x.remove());
+    if (failed) {
+      const e = document.createElement('div');
+      e.className = 'ytp-error';
+      e.innerHTML = '<div class="ytp-error-content-wrap-reason">Este vídeo no está disponible</div>';
+      setTimeout(() => el.append(e), 150);
+    }
+    endedAt = 0;
+  };
+  arrange(q.get('v'));
+
+  const inAd = () => Date.now() < adUntil;
+  setInterval(() => {
+    el.classList.toggle('ad-showing', inAd());
+    // Reproducción automática: pasados unos segundos del final, YouTube se va solo a otro vídeo (si el interruptor sigue activo)
+    if (pl.getPlayerState() === 0 && toggle.getAttribute('aria-checked') === 'true') {
+      endedAt ||= Date.now();
+      if (Date.now() - endedAt > 3000) { arrange('Zotro0000001'); pl.loadVideoById({ videoId: 'Zotro0000001', startSeconds: 0 }); }
+    } else endedAt = 0;
+  }, 200);
+
+  const names = { '-1': 'loading', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'paused' };
+  Object.assign(el, {
+    getPlayerState: () => (failed || inAd() ? -1 : pl.getPlayerState()),
+    getCurrentTime: () => (inAd() ? 0 : pl.getCurrentTime()),
+    getDuration: () => pl.getDuration(),
+    getVideoData: () => pl.getVideoData(),
+    playVideo: () => pl.playVideo(),
+    pauseVideo: () => pl.pauseVideo(),
+    seekTo: (s, allow) => pl.seekTo(s, allow),
+    stopVideo: () => pl.stopVideo(),
+    loadVideoById: (a) => { arrange(a.videoId); pl.loadVideoById(a); },
+    cueVideoById: (a) => { arrange(a.videoId); pl.cueVideoById(a); },
+    setVolume: (v) => { audio.vol = v; },
+    setPlaybackQualityRange: () => {}
+  });
+
+  window.__player = {
+    // n = el vídeo (los dos equipos de una prueba tienen el mismo); st = «none» si no hay vídeo cargado
+    snapshot: () => ({ n: pl.v, st: pl.v ? names[el.getPlayerState()] || 'loading' : 'none', pos: el.getCurrentTime(), dur: el.getDuration(), vol: audio.vol }),
+    nudge: (s) => window.YT.__nudge(s)
+  };
+})();
+</script>
+</body>
+</html>

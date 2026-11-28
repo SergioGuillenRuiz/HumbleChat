@@ -271,7 +271,9 @@ function drawNow() {
       h('div.mu-art', img ? h('img', { src: img, alt: '' }) : icon('music', 28)),
       h('div.mu-meta',
         h('div.mu-title', { title: cur.t }, cur.t),
-        h('div.mu-sub', [cur.a, cur.by && `añadida por ${cur.by === me() ? 'ti' : nameOf(cur.by)}`].filter(Boolean).join(' · ')))),
+        h('div.mu-sub', M.listening && M.player.ad && M.player.n === cur.n
+          ? 'Anuncio de YouTube… la música sigue enseguida'
+          : [cur.a, cur.by && `añadida por ${cur.by === me() ? 'ti' : nameOf(cur.by)}`].filter(Boolean).join(' · ')))),
     h('div.mu-times', ui.t0, bar, ui.t1),
     h('div.mu-ctrl',
       h('button.mu-b', { tip: 'Anterior', onclick: () => act((x) => L.prev(x, L.expectedPos(x, M.at, now()), me()), { listen: true }) }, icon('skipPrev', 22)),

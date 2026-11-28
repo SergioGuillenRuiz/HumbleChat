@@ -19,7 +19,11 @@ const { searchVideos, playlistVideos, SearchError } = require('./ytsearch')
 const { createWatchEngine } = require('./watchplayer')
 
 const DIR = path.join(__dirname, 'player')
-const FILES = { '/player.html': 'text/html; charset=utf-8', '/player.js': 'text/javascript; charset=utf-8', '/fake-yt.js': 'text/javascript; charset=utf-8' }
+const FILES = {
+  '/player.html': 'text/html; charset=utf-8', '/player.js': 'text/javascript; charset=utf-8',
+  '/fake-yt.js': 'text/javascript; charset=utf-8', '/watch': 'text/html; charset=utf-8'
+}
+const FILE_ON_DISK = { '/watch': 'fake-watch.html' }
 const ID = /^[\w-]{11}$/
 const N = /^[\w-]{4,24}$/
 const STATES = new Set(['none', 'loading', 'playing', 'paused', 'buffering', 'ended', 'error'])
@@ -56,11 +60,12 @@ function cleanEvent(e) {
 /**
  * @param {object} o
  * @param {(evt: object) => void} o.onEvent lo que cuenta el reproductor (para la interfaz)
- * @param {boolean} [o.fake] pruebas: YT simulado y datos de vídeo inventados (sin red)
- * @param {'watch'|'embed'} [o.engine] motor (por defecto «watch»; con `fake`, siempre «embed»)
+ * @param {boolean|'watch'|'embed'} [o.fake] pruebas: YouTube simulado y datos de vídeo inventados (sin red). Con 'watch', el motor de
+ *   producción «watch» contra una página de vídeo falsa; si no, el incrustado con un YT falso
+ * @param {'watch'|'embed'} [o.engine] motor (por defecto «watch»)
  */
 function createMusicPlayer({ onEvent, fake = false, engine = process.env.HUMBLECHAT_MUSIC_ENGINE }) {
-  const initialMode = !fake && engine !== 'embed' ? 'watch' : 'embed'
+  const initialMode = fake ? (fake === 'watch' ? 'watch' : 'embed') : engine !== 'embed' ? 'watch' : 'embed'
   let mode = initialMode
   let volume = { op: 'volume', vol: 60, mute: false }
   let lastLoad = null
@@ -92,7 +97,12 @@ function createMusicPlayer({ onEvent, fake = false, engine = process.env.HUMBLEC
   }
 
   // ───────────── Motor «watch» ─────────────
-  const watch = createWatchEngine({ getSession: ses, onEvent: (e) => { const evt = cleanEvent(e); if (evt) emit(evt) } })
+  const watch = createWatchEngine({
+    getSession: ses,
+    onEvent: (e) => { const evt = cleanEvent(e); if (evt) emit(evt) },
+    // En pruebas, la «página de vídeo» es una falsa servida en local
+    ...(fake === 'watch' ? { baseUrl: async () => { await ensureServer(); return `http://127.0.0.1:${port}/watch` }, allowNav: () => true } : {})
+  })
 
   // ───────────── Motor «embed» ─────────────
   let server = null
@@ -106,8 +116,8 @@ function createMusicPlayer({ onEvent, fake = false, engine = process.env.HUMBLEC
       const u = new URL(req.url, 'http://x')
       const type = FILES[u.pathname]
       // El «Host» se comprueba para que una página cualquiera no pueda leer esto resolviendo su dominio a 127.0.0.1
-      if (!type || (u.pathname === '/fake-yt.js' && !fake) || req.headers.host !== `127.0.0.1:${port}`) { res.writeHead(404); return res.end() }
-      fs.readFile(path.join(DIR, u.pathname), (err, body) => {
+      if (!type || ((u.pathname === '/fake-yt.js' || u.pathname === '/watch') && !fake) || req.headers.host !== `127.0.0.1:${port}`) { res.writeHead(404); return res.end() }
+      fs.readFile(path.join(DIR, FILE_ON_DISK[u.pathname] || u.pathname), (err, body) => {
         if (err) { res.writeHead(404); return res.end() }
         res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
         res.end(body)
@@ -191,7 +201,7 @@ function createMusicPlayer({ onEvent, fake = false, engine = process.env.HUMBLEC
     },
     /** Título y canal de un vídeo (con `unknown`, no se pudo consultar). */
     async meta(id) {
-      if (fake) return typeof id === 'string' && id[0] === 'N' ? { ok: false, reason: 'noembed' } : ID.test(id) ? { ok: true, title: 'Canción ' + id.slice(0, 5), author: 'Artista de prueba' } : { ok: false, reason: 'invalid' }
+      if (fake) return typeof id === 'string' && id[0] === 'N' && fake !== 'watch' ? { ok: false, reason: 'noembed' } : ID.test(id) ? { ok: true, title: 'Canción ' + id.slice(0, 5), author: 'Artista de prueba' } : { ok: false, reason: 'invalid' }
       // Con el motor «watch» da igual que el dueño no permita incrustar: solo importa que el vídeo exista
       const m = await fetchMeta(id, fetchYT)
       return mode === 'watch' && !m.ok && m.reason === 'noembed' ? { ok: true, title: null, author: null, unknown: true } : m

@@ -584,7 +584,7 @@ app.whenReady().then(async () => {
   settings = createSettings(app.getPath('userData'))
   registerProtocol()
   setupSession()
-  music = createMusicPlayer({ fake: !!process.env.HUMBLECHAT_FAKE_MUSIC, onEvent: (evt) => send('music', { evt }) })
+  music = createMusicPlayer({ fake: process.env.HUMBLECHAT_FAKE_MUSIC === 'watch' ? 'watch' : !!process.env.HUMBLECHAT_FAKE_MUSIC, onEvent: (evt) => send('music', { evt }) })
   setupIpc()
   updates = startUpdates({
     send,

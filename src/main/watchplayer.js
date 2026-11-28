@@ -38,8 +38,10 @@ const errorCode = (text) => (/sign in|inicia sesi|age|edad|confirm/i.test(text) 
  * @param {object} o
  * @param {() => Electron.Session} o.getSession sesión aislada de la música (con las cookies de consentimiento); se pide al abrir la ventana
  * @param {(evt: object) => void} o.onEvent
+ * @param {() => Promise<string>} [o.baseUrl] solo pruebas: dirección de una página de vídeo falsa (por defecto, youtube.com/watch)
+ * @param {(url: string) => boolean} [o.allowNav] a qué direcciones puede ir la ventana (por defecto, solo YouTube y Google)
  */
-function createWatchEngine({ getSession, onEvent }) {
+function createWatchEngine({ getSession, onEvent, baseUrl = null, allowNav = (url) => /^https:\/\/([\w-]+\.)?(youtube|google)\.com\//.test(url) }) {
   let win = null;
   let cur = { n: null, v: null };
   let err = null;
@@ -55,7 +57,7 @@ function createWatchEngine({ getSession, onEvent }) {
 
   const alive = () => win && !win.isDestroyed();
   const exec = (js) => (alive() ? win.webContents.executeJavaScript(js, true).catch(() => null) : Promise.resolve(null));
-  const watchUrl = (v, pos) => `https://www.youtube.com/watch?v=${v}${pos >= 1 ? `&t=${Math.floor(pos)}s` : ''}`;
+  const watchUrl = async (v, pos) => `${baseUrl ? await baseUrl() : 'https://www.youtube.com/watch'}?v=${v}${pos >= 1 ? `&t=${Math.floor(pos)}s` : ''}`;
 
   function emit(kind, extra) {
     onEvent({ e: kind, n: cur.n, st: 'none', pos: 0, dur: 0, vid: null, ...extra });
@@ -131,7 +133,7 @@ function createWatchEngine({ getSession, onEvent }) {
     const w = win;
     w.webContents.setUserAgent(w.webContents.getUserAgent().replace(/\s(?:Electron|humblechat)\/\S+/gi, ''));
     w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    w.webContents.on('will-navigate', (e, url) => { if (!/^https:\/\/([\w-]+\.)?(youtube|google)\.com\//.test(url)) e.preventDefault(); });
+    w.webContents.on('will-navigate', (e, url) => { if (!allowNav(url)) e.preventDefault(); });
     w.webContents.on('render-process-gone', () => { if (win === w) win = null; });
     w.on('closed', () => { if (win === w) win = null; });
     w.webContents.setAudioMuted(audio.mute);
@@ -153,13 +155,15 @@ function createWatchEngine({ getSession, onEvent }) {
       open();
       pending = c.play;
       wc().setAudioMuted(c.play ? audio.mute : true); // si va a empezar en pausa, nada se oye hasta que se pause
-      win.loadURL(watchUrl(c.v, c.pos), { httpReferrer: 'https://www.youtube.com/' }).catch((e) => { if (cur.n === c.n) { console.warn('[musica] no se pudo cargar youtube.com:', e?.message || e); fail(-3); } });
+      const url = await watchUrl(c.v, c.pos);
+      if (!alive()) return;
+      win.loadURL(url, { httpReferrer: 'https://www.youtube.com/' }).catch((e) => { if (cur.n === c.n) { console.warn('[musica] no se pudo cargar youtube.com:', e?.message || e); fail(-3); } });
       return;
     }
     const arg = `{ videoId: ${JSON.stringify(c.v)}, startSeconds: ${Math.floor(c.pos)} }`;
     const ok = await exec(call(c.play ? `(p.loadVideoById(${arg}), true)` : `(p.cueVideoById(${arg}), true)`));
     if (!ok) { // la página aún no está lista o se perdió: se vuelve a cargar entera
-      win.loadURL(watchUrl(c.v, c.pos), { httpReferrer: 'https://www.youtube.com/' }).catch(() => fail(-3));
+      win.loadURL(await watchUrl(c.v, c.pos), { httpReferrer: 'https://www.youtube.com/' }).catch(() => fail(-3));
       pending = c.play;
     }
   }

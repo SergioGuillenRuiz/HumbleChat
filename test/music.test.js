@@ -438,3 +438,80 @@ test('el estado más grande posible cabe holgado en el límite de 64 KB de una s
   const tam = JSON.stringify({ k: 'mus', d: { t: 'st', s } }).length
   assert.ok(tam < 32 * 1024, 'ocupa ' + tam + ' caracteres')
 })
+
+// ───────────── Búsqueda y listas (páginas de YouTube sintéticas; la real la mira la sonda «YouTube real») ─────────────
+
+const { searchVideos, playlistVideos, SearchError, balancedJson, initialData, parseDuration } = require('../src/main/ytsearch')
+const page = (data, pre = '') => `<html><head>${pre}</head><body><script nonce="x">var ytInitialData = ${JSON.stringify(data)};</script><script>window.other = {"a":1};</script></body></html>`
+const web = (html, status = 200) => async () => ({ ok: status < 300, status, text: async () => html })
+const run = (t, a = 'Canal') => ({ runs: [{ text: t }] })
+const video = (id, t, d) => ({ videoRenderer: { videoId: id, title: run(t), ownerText: run('Canal de ' + t), lengthText: { simpleText: d } } })
+const lockup = (id, t, d) => ({
+  lockupViewModel: {
+    contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: id,
+    metadata: { lockupMetadataViewModel: { title: { content: t }, metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: 'Autor de ' + t } }] }] } } } },
+    contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { badges: [{ thumbnailBadgeViewModel: { text: d } }] } }] } }
+  }
+})
+const results = (...items) => ({ contents: { twoColumnSearchResultsRenderer: { primaryContents: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: items } }] } } } } })
+
+test('duraciones y JSON con llaves dentro de las cadenas', () => {
+  assert.equal(parseDuration('3:33'), 213)
+  assert.equal(parseDuration('1:02:05'), 3725)
+  assert.equal(parseDuration('en directo'), 0)
+  assert.equal(parseDuration(undefined), 0)
+  const html = 'x = {"a":"} {","b":{"c":[1,2,{"d":"\\"}"}]}}; y = {"z":1}'
+  assert.deepEqual(balancedJson(html, html.indexOf('{')), { a: '} {', b: { c: [1, 2, { d: '"}' }] } })
+  assert.equal(balancedJson('{"a":1', 0), null)
+})
+
+test('búsqueda: lee las dos maquetas de YouTube, sin repetir ni inventar', async () => {
+  const data = results(
+    video('aaaaaaaaaaa', 'Primera  canción', '3:33'),
+    lockup('bbbbbbbbbbb', 'Segunda (maqueta nueva)', '1:02:05'),
+    video('aaaaaaaaaaa', 'Primera repetida', '3:33'), // repetido: se descarta
+    { videoRenderer: { videoId: 'corto', title: run('id malo') } }, // identificador inválido
+    { videoRenderer: { videoId: 'ccccccccccc' } }, // sin título
+    { channelRenderer: { channelId: 'UC123' } }, // no es un vídeo
+    { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST', contentId: 'PLxxxxxxxxxxxxxxxx' } },
+    video('ddddddddddd', 'x'.repeat(300), '0:59')
+  )
+  const r = await searchVideos('  una   búsqueda ', web(page(data)))
+  assert.deepEqual(r.map((x) => x.v), ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ddddddddddd'])
+  assert.deepEqual(r[0], { v: 'aaaaaaaaaaa', t: 'Primera canción', a: 'Canal de Primera canción', d: 213 })
+  assert.deepEqual([r[1].t, r[1].a, r[1].d], ['Segunda (maqueta nueva)', 'Autor de Segunda (maqueta nueva)', 3725])
+  assert.equal(r[2].t.length, 120)
+  // límite de resultados y la petición lleva solo lo buscado
+  let url = null
+  const muchos = results(...Array.from({ length: 30 }, (_, k) => video(String(k).padStart(11, 'v'), 'Título ' + k, '2:00')))
+  const r2 = await searchVideos('rock', async (u, o) => { url = u; return web(page(muchos))(u, o) }, { limit: 5 })
+  assert.equal(r2.length, 5)
+  assert.match(url, /^https:\/\/www\.youtube\.com\/results\?.*search_query=rock$/)
+  assert.match(url, /sp=EgIQAQ%253D%253D/)
+})
+
+test('búsqueda: errores claros cuando YouTube cambia, pide cookies o no responde', async () => {
+  const msg = async (p) => p.then(() => null, (e) => (e instanceof SearchError ? e.message : 'OTRO: ' + e.message))
+  assert.match(await msg(searchVideos('', web(''))), /Escribe algo/)
+  assert.match(await msg(searchVideos('rock', web('<html>nada</html>'))), /ha cambiado su página/)
+  assert.match(await msg(searchVideos('rock', web('<html><a href="https://consent.youtube.com/m">Antes de continuar</a></html>'))), /cookies/)
+  assert.match(await msg(searchVideos('rock', web(page(results())))), /No hay resultados para «rock»/)
+  assert.match(await msg(searchVideos('rock', web('', 429))), /respondió 429/)
+  assert.match(await msg(searchVideos('rock', async () => { throw new Error('ECONNRESET') })), /no se pudo conectar/)
+  assert.match(await msg(searchVideos('rock', web('<script>var ytInitialData = {"roto": </script>'))), /ha cambiado su página/)
+  assert.match(await msg(searchVideos('rock', web('a'.repeat(7 * 1024 * 1024)))), /demasiado grande/)
+  assert.throws(() => initialData('<html></html>'), SearchError)
+})
+
+test('listas de reproducción: vídeos jugables, hasta el límite, y errores', async () => {
+  const items = [
+    { playlistVideoRenderer: { videoId: 'aaaaaaaaaaa', title: run('Uno'), shortBylineText: run('Autor'), lengthSeconds: '215', isPlayable: true } },
+    { playlistVideoRenderer: { videoId: 'bbbbbbbbbbb', title: run('Borrado'), isPlayable: false } }, // privado o borrado
+    { playlistVideoRenderer: { videoId: 'ccccccccccc', title: run('Tres'), lengthSeconds: '99' } }
+  ]
+  const data = { contents: { twoColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: [{ playlistVideoListRenderer: { contents: items } }] } }] } } } }] } } }
+  const r = await playlistVideos('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI', web(page(data)))
+  assert.deepEqual(r, [{ v: 'aaaaaaaaaaa', t: 'Uno', a: 'Autor', d: 215 }, { v: 'ccccccccccc', t: 'Tres', a: '', d: 99 }])
+  await assert.rejects(playlistVideos('corta', web('')), /no válida/)
+  await assert.rejects(playlistVideos('PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI', web(page({ contents: {} }))), /vacía, es privada o no existe/)
+})

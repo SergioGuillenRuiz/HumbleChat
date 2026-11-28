@@ -28,7 +28,8 @@ if (!quick) {
     steps.push({ name: 'Varias salas', cmd: ['node', 'test/e2e2.js', 'salas'], gui: true })
     steps.push({ name: 'Inactividad en llamada', cmd: ['node', 'test/e2e2.js', 'afk'], gui: true })
     steps.push({ name: 'Utilidades de la llamada', cmd: ['node', 'test/e2e2.js', 'utilidades'], gui: true })
-    steps.push({ name: 'Escuchar juntos (música)', cmd: ['node', 'test/e2e2.js', 'musica'], gui: true })
+    steps.push({ name: 'Escuchar juntos (música, reproductor incrustado)', cmd: ['node', 'test/e2e2.js', 'musica'], gui: true })
+    steps.push({ name: 'Escuchar juntos (música, motor de producción)', cmd: ['node', 'test/e2e2.js', 'musica-watch'], gui: true })
   }
 }
 

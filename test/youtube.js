@@ -184,11 +184,13 @@ async function escenarioSinAnuncios() {
   await load(VIDEOS.zoo, 'zoo00009', 15, true) // empieza a 4 s del final
   const end = await waitFor((e) => e.n === 'zoo00009' && e.st === 'ended', 30000, since)
   check('el vídeo corto acaba y lo avisa', end)
-  since = from()
-  await sleep(12000)
-  const other = log.slice(since).find((e) => e.vid && e.vid !== VIDEOS.zoo && e.st === 'playing')
-  check('al acabar no salta solo a otro vídeo', !other, other ? 'vid=' + other.vid : '')
+  // Como hace la aplicación al agotarse la cola: parar. YouTube intenta seguir solo con otro vídeo a los pocos segundos.
   await player.command({ op: 'stop' })
+  await sleep(14000)
+  const w = player._window()
+  const page = w ? JSON.parse(await w.webContents.executeJavaScript(`(() => { const p = document.getElementById('movie_player'); return JSON.stringify({ st: p.getPlayerState(), vid: p.getVideoData().video_id }); })()`).catch(() => '{}')) : {}
+  check('tras parar, la página no vuelve a reproducir nada (ni se va a otro vídeo)', page.st !== 1, JSON.stringify(page))
+  check('y la ventana queda muda', !!w && w.webContents.isAudioMuted())
 }
 
 async function main() {
