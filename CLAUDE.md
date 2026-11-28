@@ -25,6 +25,7 @@ Chat P2P de texto/voz/vídeo (Electron + Hyperswarm). Sin servidor. Windows y Li
 | `node test/publicnet.js ana\|beto <llave>` | Prueba con la DHT pública entre dos máquinas (la lanza el nocturno, no se usa en local) |
 | `node test/quality.js audio\|video` | Medidas de calidad, no es pasa/no pasa |
 | `npm start` | Ejecuta la app (necesita pantalla) |
+| `node scripts/diagramas.js` | Regenera `docs/malla.svg` y `docs/llamadas.svg` (los diagramas del README; no se editan a mano) |
 
 ## Entorno
 - El hook SessionStart (`scripts/claude-setup.sh`) instala dependencias, el binario de Electron y Xvfb. El hook Stop (`scripts/claude-stop-check.sh`) lanza `verify:quick` si hay cambios sin verificar y te devuelve el fallo.
