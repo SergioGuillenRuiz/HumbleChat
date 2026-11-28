@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-labelledby="t d">
+<title id="t">Los caminos de una llamada en HumbleChat</title><desc id="d">La voz, la cámara y la pantalla buscan solas el mejor camino entre dos equipos: primero directo; si en 4 segundos no conecta, por la misma conexión que usa el chat; si tampoco, por un amigo que hace de puente; y por último por un servidor TURN, solo si está configurado.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d1026"/><stop offset="1" stop-color="#1c2148"/></linearGradient>
+  <radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#5865f2" stop-opacity=".35"/><stop offset="1" stop-color="#5865f2" stop-opacity="0"/></radialGradient>
+  <linearGradient id="cloud" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#454b94"/><stop offset="1" stop-color="#2b3070"/></linearGradient>
+  <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="9"/></filter>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity=".45"/></filter>
+  <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="20" orient="auto"><path d="M0 0 10 5 0 10z" fill="#faa61a"/></marker>
+  <style>
+    text{font-family:'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif}
+    .title{font-size:30px;font-weight:700;fill:#fff}
+    .h{font-size:27px;font-weight:700;fill:#fff}
+    .cap{font-size:21px;fill:#b4baea}
+    .name{font-size:22px;font-weight:600;fill:#e8ebff;paint-order:stroke;stroke:#12163a;stroke-width:5px;stroke-linejoin:round}
+    .ini{font-size:30px;font-weight:700;fill:#fff}
+    .small{font-size:19px;fill:#e8ebff}
+    .leg{font-size:19px;fill:#b4baea}
+  </style>
+</defs>
+<rect width="1200" height="600" rx="26" fill="url(#bg)"/>
+<circle cx="600" cy="270" r="330" fill="url(#glow)" opacity=".5"/>
+<text x="600" y="62" text-anchor="middle" class="title">Una llamada busca sola el mejor camino</text><rect x="24" y="100" width="261" height="400" rx="22" fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.12)"/><circle cx="58" cy="146" r="20" fill="#5865f2"/><text x="58" y="154" text-anchor="middle" class="ini" style="font-size:22px">1</text><text x="92" y="155" class="h" style="font-size:24px">Directo</text><rect x="321" y="100" width="261" height="400" rx="22" fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.12)"/><circle cx="355" cy="146" r="20" fill="#5865f2"/><text x="355" y="154" text-anchor="middle" class="ini" style="font-size:22px">2</text><text x="389" y="155" class="h" style="font-size:24px">Por el chat</text><rect x="618" y="100" width="261" height="400" rx="22" fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.12)"/><circle cx="652" cy="146" r="20" fill="#5865f2"/><text x="652" y="154" text-anchor="middle" class="ini" style="font-size:22px">3</text><text x="686" y="155" class="h" style="font-size:24px">Por un amigo</text><rect x="915" y="100" width="261" height="400" rx="22" fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.12)"/><circle cx="949" cy="146" r="20" fill="#5865f2"/><text x="949" y="154" text-anchor="middle" class="ini" style="font-size:22px">4</text><text x="983" y="155" class="h" style="font-size:24px">Servidor TURN</text><line x1="94" y1="292" x2="215" y2="292" stroke="#3ba55d" stroke-width="7" stroke-linecap="round"/><g><circle cx="80" cy="292" r="38" fill="#5865f2" opacity=".35" filter="url(#blur)"/>
+<circle cx="80" cy="292" r="28" fill="#5865f2" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="80" y="302" text-anchor="middle" class="ini" style="font-size:24px">A</text>
+<text x="80" y="348" text-anchor="middle" class="name">Ana</text></g><g><circle cx="229" cy="292" r="38" fill="#3ba55d" opacity=".35" filter="url(#blur)"/>
+<circle cx="229" cy="292" r="28" fill="#3ba55d" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="229" y="302" text-anchor="middle" class="ini" style="font-size:24px">B</text>
+<text x="229" y="348" text-anchor="middle" class="name">Beto</text></g><text x="154.5" y="392" text-anchor="middle" class="cap">Entre los dos equipos,</text><text x="154.5" y="420" text-anchor="middle" class="cap">sin pasar por nadie.</text><text x="154.5" y="448" text-anchor="middle" class="cap">Es lo normal.</text><line x1="391" y1="292" x2="512" y2="292" stroke="#1abc9c" stroke-width="7" stroke-linecap="round"/><g filter="url(#shadow)"><rect x="399.5" y="267" width="104" height="50" rx="14" fill="#14173a" stroke="#1abc9c" stroke-width="3"/><text x="451.5" y="289" text-anchor="middle" class="small" style="font-size:16px;font-weight:700">conexión</text><text x="451.5" y="308" text-anchor="middle" class="small" style="font-size:16px;font-weight:700">del chat</text></g><g><circle cx="377" cy="292" r="38" fill="#5865f2" opacity=".35" filter="url(#blur)"/>
+<circle cx="377" cy="292" r="28" fill="#5865f2" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="377" y="302" text-anchor="middle" class="ini" style="font-size:24px">A</text>
+<text x="377" y="348" text-anchor="middle" class="name">Ana</text></g><g><circle cx="526" cy="292" r="38" fill="#3ba55d" opacity=".35" filter="url(#blur)"/>
+<circle cx="526" cy="292" r="28" fill="#3ba55d" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="526" y="302" text-anchor="middle" class="ini" style="font-size:24px">B</text>
+<text x="526" y="348" text-anchor="middle" class="name">Beto</text></g><text x="451.5" y="392" text-anchor="middle" class="cap">Va dentro de la conexión</text><text x="451.5" y="420" text-anchor="middle" class="cap">que ya usa el chat.</text><text x="451.5" y="448" text-anchor="middle" class="cap">Cruza redes estrictas.</text><polyline points="690,284 726.5,250" stroke="#faa61a" stroke-width="7" stroke-linecap="round" fill="none"/><polyline points="770.5,250 807,284" stroke="#faa61a" stroke-width="7" stroke-linecap="round" fill="none"/><g><circle cx="668" cy="306" r="38" fill="#5865f2" opacity=".35" filter="url(#blur)"/>
+<circle cx="668" cy="306" r="28" fill="#5865f2" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="668" y="316" text-anchor="middle" class="ini" style="font-size:24px">A</text>
+<text x="668" y="362" text-anchor="middle" class="name">Ana</text></g><g><circle cx="829" cy="306" r="38" fill="#3ba55d" opacity=".35" filter="url(#blur)"/>
+<circle cx="829" cy="306" r="28" fill="#3ba55d" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="829" y="316" text-anchor="middle" class="ini" style="font-size:24px">B</text>
+<text x="829" y="362" text-anchor="middle" class="name">Beto</text></g><g><circle cx="748.5" cy="228" r="38" fill="#faa61a" opacity=".35" filter="url(#blur)"/>
+<circle cx="748.5" cy="228" r="28" fill="#faa61a" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="748.5" y="238" text-anchor="middle" class="ini" style="font-size:24px">C</text>
+<text x="748.5" y="184" text-anchor="middle" class="name">Carla</text></g><text x="748.5" y="392" text-anchor="middle" class="cap">Un amigo con mejor red</text><text x="748.5" y="420" text-anchor="middle" class="cap">retransmite el audio.</text><text x="748.5" y="448" text-anchor="middle" class="cap">Él sí lo oye.</text><line x1="985" y1="292" x2="1106" y2="292" stroke="#9aa4ff" stroke-width="7" stroke-linecap="round" stroke-dasharray="3 12"/><g filter="url(#shadow)" transform="translate(1045.5 292)"><rect x="-26" y="-34" width="52" height="68" rx="9" fill="#14173a" stroke="#9aa4ff" stroke-width="3"/><rect x="-17" y="-24" width="34" height="11" rx="3" fill="#5865f2"/><rect x="-17" y="-8" width="34" height="11" rx="3" fill="#5865f2"/><circle cx="-10" cy="21" r="3.2" fill="#3ba55d"/><circle cx="0" cy="21" r="3.2" fill="#9aa4ff"/></g><g><circle cx="971" cy="292" r="38" fill="#5865f2" opacity=".35" filter="url(#blur)"/>
+<circle cx="971" cy="292" r="28" fill="#5865f2" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="971" y="302" text-anchor="middle" class="ini" style="font-size:24px">A</text>
+<text x="971" y="348" text-anchor="middle" class="name">Ana</text></g><g><circle cx="1120" cy="292" r="38" fill="#3ba55d" opacity=".35" filter="url(#blur)"/>
+<circle cx="1120" cy="292" r="28" fill="#3ba55d" stroke="#fff" stroke-opacity=".85" stroke-width="3" filter="url(#shadow)"/>
+<text x="1120" y="302" text-anchor="middle" class="ini" style="font-size:24px">B</text>
+<text x="1120" y="348" text-anchor="middle" class="name">Beto</text></g><text x="1045.5" y="392" text-anchor="middle" class="cap">Servidor intermedio,</text><text x="1045.5" y="420" text-anchor="middle" class="cap">solo si lo configuras.</text><text x="1045.5" y="448" text-anchor="middle" class="cap">Sin él, no se usa.</text><path d="M295 292 l12 0 m-5 -7 l7 7 -7 7" stroke="#5865f2" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M592 292 l12 0 m-5 -7 l7 7 -7 7" stroke="#5865f2" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M889 292 l12 0 m-5 -7 l7 7 -7 7" stroke="#5865f2" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="600" y="540" text-anchor="middle" class="small" style="font-size:21px">Si un camino no conecta en <tspan style="font-weight:700;fill:#fff">4 segundos</tspan>, se prueba el siguiente.</text><text x="600" y="572" text-anchor="middle" class="leg" style="font-size:19px">Todo va cifrado. Solo en el camino 3 el amigo que hace de puente oye lo que retransmite.</text></svg>

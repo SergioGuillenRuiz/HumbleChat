@@ -51,28 +51,18 @@ Para saberlo solo consulta la lista pública de versiones del proyecto; no enví
 
 La mayoría de los chats funcionan con un **servidor central**: tus mensajes, tu voz y tu cuenta pasan por los ordenadores de una empresa, que es quien los guarda. HumbleChat funciona al revés: **no hay ningún sitio central**, la «sala» son los propios equipos de los amigos.
 
-```
-        Tu equipo                                Equipo de un amigo
-  ┌───────────────────────┐   conexión directa  ┌───────────────────────┐
-  │  HumbleChat           │◄═══════════════════►│  HumbleChat           │
-  │  · tu historial       │   cifrada: chat,    │  · su historial       │
-  │  · tu identidad       │   voz, vídeo y      │  · su identidad       │
-  │  · tus salas          │   archivos          │  · sus salas          │
-  └───────────┬───────────┘                     └───────────┬───────────┘
-              │                                             │
-              │      «¿quién más está en esta sala?»        │
-              └──────────►  Directorio público  ◄───────────┘
-                       (solo sirve para encontrarse: no ve
-                        mensajes, voz, vídeo ni quién habla con quién)
-```
+<p align="center"><img src="docs/malla.svg" width="100%" alt="Diagrama de una sala de HumbleChat en tres pasos. Uno: cinco equipos preguntan a un directorio público quién más está en la sala; el directorio solo da direcciones. Dos: cada equipo se conecta directamente, y cifrado, con todos los demás, formando una malla completa. Tres: cada mensaje se reenvía por la malla y cada equipo guarda su copia, de modo que llega aunque dos equipos no puedan conectar entre sí porque un amigo lo reenvía."></p>
 
-- **Encontrarse.** Cuando abres la aplicación, pregunta a un directorio público abierto «¿quién más está en esta sala?» y recibe las direcciones de tus amigos. A partir de ahí hablan directamente. El directorio no guarda conversaciones: es como una guía telefónica. La sala se identifica con el **código de sala**, que solo conocéis vosotros.
-- **Tus mensajes viven en tu equipo.** Cada persona guarda en su ordenador el historial de las salas en las que está. Cuando dos amigos se conectan, comparan lo que tienen y se pasan lo que le falta a cada uno. Por eso no hace falta que todos estén conectados a la vez, pero sí que alguien que tenga un mensaje coincida con quien le falta.
+- **Encontrarse.** Cuando abres la aplicación, pregunta a un directorio público abierto «¿quién más está en esta sala?» y recibe las direcciones de tus amigos. El directorio no guarda conversaciones: es como una guía telefónica, y solo se usa para este primer paso. La sala se identifica con el **código de sala**, que solo conocéis vosotros.
+- **Todos con todos (una malla).** A partir de ahí tu equipo se conecta directamente con **cada uno** de los demás que estén en la sala (todos con todos), con una conexión cifrada y solo con quien conozca el código. No hay nadie en medio ni nadie «al mando»: si falta un equipo, el resto sigue como si nada.
+- **Tus mensajes viven en tu equipo.** Cada persona guarda en su ordenador el historial de las salas en las que está. Cada mensaje nuevo se envía a todos y cada equipo lo reenvía a sus vecinos, así que llega incluso a quien no puede conectar directamente con quien lo escribió. Cuando dos amigos se conectan, comparan lo que tienen y se pasan lo que le falta a cada uno. Por eso no hace falta que todos estén conectados a la vez, pero sí que alguien que tenga un mensaje coincida con quien le falta.
 - **Quién eres.** Al instalar, la aplicación crea una identidad: una clave secreta que solo existe en tu equipo (no hay cuentas ni contraseñas). Cada mensaje que escribes lleva tu firma, así nadie puede hacerse pasar por ti ni cambiar lo que dijiste. Tu **ID** es la parte pública de esa clave; es la misma en todas tus salas.
 - **Cada sala, su mundo.** Cada sala tiene su propia conexión, sus amigos y su historial guardado aparte: lo de una sala nunca se mezcla ni se envía a otra, aunque estés en las dos a la vez.
-- **Llamadas.** La voz, la cámara y la pantalla viajan directamente de tu equipo al de tu amigo, sin pasar por ningún sitio, como una llamada sin central. Algunas redes (los datos del móvil o los routers muy estrictos) no dejan que dos equipos se conecten así; en ese caso la aplicación hace pasar la llamada por la misma conexión que ya usa el chat, y si tampoco es posible, otro amigo con mejor conexión hace de puente. Todo va cifrado por el camino; solo en este último caso, el amigo que hace de puente oye el audio que retransmite.
+- **Llamadas.** La voz, la cámara y la pantalla viajan directamente de tu equipo al de cada persona de la llamada, sin pasar por ningún sitio, como una llamada sin central. Como cada uno envía su imagen y su voz a cada uno de los demás, el esfuerzo crece con la gente: por eso está pensado para unas 6 personas por llamada. Algunas redes (los datos del móvil o los routers muy estrictos) no dejan que dos equipos se conecten así; en ese caso la aplicación hace pasar la llamada por la misma conexión que ya usa el chat, y si tampoco es posible, otro amigo con mejor conexión hace de puente. Todo va cifrado por el camino; solo en este último caso, el amigo que hace de puente oye el audio que retransmite.
 - **Música.** Por la llamada no viaja audio de música: cada persona que decide escuchar reproduce su propia copia desde YouTube, y las aplicaciones se pasan entre sí un estado muy pequeño (qué canción, si suena, en qué segundo) para ir a la vez. YouTube se abre en una ventana aparte y oculta, sin acceso a nada de tu chat, y se le quitan los anuncios para que todos se mantengan a la vez.
 - **Actualizaciones.** Cada versión nueva es obligatoria para que todos se entiendan; la aplicación la descarga sola de la página de versiones del proyecto.
+
+<p align="center"><img src="docs/llamadas.svg" width="100%" alt="Los cuatro caminos de una llamada, en orden: directo entre los dos equipos; por la misma conexión que usa el chat; por un amigo que hace de puente y que sí oye el audio; y por un servidor TURN, solo si está configurado. Si un camino no conecta en cuatro segundos se prueba el siguiente."></p>
 
 ### En qué se diferencia de un chat con servidor
 
