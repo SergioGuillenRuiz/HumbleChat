@@ -36,10 +36,10 @@ const errorCode = (text) => (/sign in|inicia sesi|age|edad|confirm/i.test(text) 
 
 /**
  * @param {object} o
- * @param {Electron.Session} o.session sesión aislada de la música (con las cookies de consentimiento)
+ * @param {() => Electron.Session} o.getSession sesión aislada de la música (con las cookies de consentimiento); se pide al abrir la ventana
  * @param {(evt: object) => void} o.onEvent
  */
-function createWatchEngine({ session, onEvent }) {
+function createWatchEngine({ getSession, onEvent }) {
   let win = null;
   let cur = { n: null, v: null };
   let err = null;
@@ -121,7 +121,7 @@ function createWatchEngine({ session, onEvent }) {
       show: false, width: 1000, height: 700, skipTaskbar: true, focusable: false,
       webPreferences: {
         preload: path.join(__dirname, 'watch-preload.js'),
-        session,
+        session: getSession(),
         // El preload tiene que correr en el mismo mundo que los scripts de YouTube para podar sus respuestas; la ventana no tiene
         // ningún puente con la aplicación ni acceso a Node, y solo carga youtube.com.
         contextIsolation: false, sandbox: true, nodeIntegration: false, spellcheck: false,

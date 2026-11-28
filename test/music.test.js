@@ -27,6 +27,41 @@ test('parseYouTube entiende los enlaces habituales y rechaza el resto', async ()
   ]) assert.equal(parseYouTube(u), null, String(u))
 })
 
+test('listas de reproducción y enlaces: se distinguen de un vídeo y de unas palabras', async () => {
+  const { parseYouTubeList, looksLikeLink, parseYouTube } = await load()
+  const L = 'PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI'
+  assert.equal(parseYouTubeList('https://www.youtube.com/playlist?list=' + L), L)
+  assert.equal(parseYouTubeList('youtube.com/playlist?list=' + L + '&si=x'), L)
+  assert.equal(parseYouTubeList('https://music.youtube.com/playlist?list=' + L), L)
+  // un vídeo que viene de una lista sigue siendo un vídeo
+  assert.equal(parseYouTubeList('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=' + L), null)
+  assert.equal(parseYouTube('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=' + L), 'dQw4w9WgXcQ')
+  for (const bad of ['', 'hola', 'https://evil.com/playlist?list=' + L, 'https://www.youtube.com/playlist', 'https://www.youtube.com/playlist?list=corta', 'javascript:alert(1)', null]) assert.equal(parseYouTubeList(bad), null, String(bad))
+  for (const yes of ['https://youtu.be/x', 'www.youtube.com/watch?v=1', 'youtube.com/playlist?list=a', 'ejemplo.com/hola', 'http://x.y']) assert.ok(looksLikeLink(yes), yes)
+  for (const no of ['me at the zoo', 'bohemian rhapsody', 'AC/DC thunderstruck', 'queen', '', 'rock 80s']) assert.ok(!looksLikeLink(no), no)
+})
+
+test('varias canciones a la vez: entran las que caben y arranca la primera si no sonaba nada', async () => {
+  const m = await load()
+  const t = (k) => track(V1, 'p' + String(k).padStart(3, '0'))
+  let r = m.addTracks(m.emptyState(), [t(1), t(2), t(3)], A)
+  assert.equal(r.added, 3)
+  assert.deepEqual([m.current(r.state).n, r.state.play, r.state.rev], ['p001', true, 1])
+  // con algo sonando, se ponen al final sin interrumpir
+  r = m.addTracks(r.state, [t(4), t(5)], B)
+  assert.deepEqual([m.current(r.state).n, r.state.q.length, r.state.rev, r.state.by], ['p001', 5, 2, B])
+  // solo caben las que quedan; con la cola llena no cambia nada
+  const casi = { ...r.state, q: Array.from({ length: 48 }, (_, k) => t(100 + k)) }
+  assert.equal(m.addTracks(casi, [t(7), t(8), t(9)], A).added, 2)
+  const lleno = { ...r.state, q: Array.from({ length: 50 }, (_, k) => t(200 + k)) }
+  const nada = m.addTracks(lleno, [t(1)], A)
+  assert.deepEqual([nada.added, nada.state === lleno], [0, true])
+  // con la cola agotada, empieza por la primera de las nuevas
+  const fin = m.next(m.addTrack(m.emptyState(), t(1), A), A)
+  const r2 = m.addTracks(fin, [t(2), t(3)], A)
+  assert.deepEqual([m.current(r2.state).n, r2.state.play], ['p002', true])
+})
+
 test('fmtTime', async () => {
   const { fmtTime } = await load()
   assert.equal(fmtTime(0), '0:00')

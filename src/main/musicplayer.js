@@ -92,7 +92,7 @@ function createMusicPlayer({ onEvent, fake = false, engine = process.env.HUMBLEC
   }
 
   // ───────────── Motor «watch» ─────────────
-  const watch = createWatchEngine({ get session() { return ses() }, onEvent: (e) => { const evt = cleanEvent(e); if (evt) emit(evt) } })
+  const watch = createWatchEngine({ getSession: ses, onEvent: (e) => { const evt = cleanEvent(e); if (evt) emit(evt) } })
 
   // ───────────── Motor «embed» ─────────────
   let server = null

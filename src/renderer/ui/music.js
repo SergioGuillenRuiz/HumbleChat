@@ -24,7 +24,8 @@ const fresh = () => ({
   deaf: false
 })
 let M = fresh()
-const ui = { dock: null, input: null, add: null, vol: null, volText: null, now: null, err: null, queue: null, fill: null, t0: null, t1: null }
+const ui = { dock: null, input: null, add: null, vol: null, volText: null, now: null, err: null, queue: null, results: null, fill: null, t0: null, t1: null }
+let found = null // resultados de la última búsqueda: { q, items, added: Set }
 const thumbs = new Map() // vídeo -> data: | null
 let volume = Math.min(Math.max(Number(store('musicVol') ?? 60), 0), 100) // sobrevive a las reinicializaciones del estado (colgar y volver a entrar)
 
@@ -157,25 +158,71 @@ const togglePlay = () => act((s) => L.setPlay(s, !s.play, L.expectedPos(s, M.at,
 
 // ───────────── Añadir ─────────────
 
+/** Una canción (de un enlace o de un resultado): se comprueba que existe, se pone en cola y, si no sonaba nada, suena. */
+async function addVideo(v, known) {
+  if (M.s.q.length >= L.LIMITS.queue) return toast(`La cola está llena (máximo ${L.LIMITS.queue} canciones).`, 'warn')
+  const meta = await window.humble.musicMeta(v)
+  if (!meta?.ok) return toast(meta?.reason === 'noembed' ? 'Su dueño no permite reproducir ese vídeo fuera de YouTube.' : 'Ese vídeo no existe o es privado.', 'warn')
+  if (!inCall()) return
+  const track = L.newTrack(v, { title: meta.title || known?.t, author: meta.author || known?.a }, me())
+  M.mine.set(track.n, track)
+  setTimeout(() => M.mine.delete(track.n), MINE_MS)
+  act((s) => L.addTrack(s, track, me()), { listen: !L.current(M.s) || M.listening })
+  return true
+}
+
+/** Lo que se escribe en la caja: un enlace de vídeo, un enlace de lista o unas palabras para buscar. */
 async function addFromInput() {
   const text = ui.input.value.trim()
-  if (!text) return
-  const v = L.parseYouTube(text)
-  if (!v) return toast('Pega el enlace de un vídeo de YouTube (las listas de reproducción todavía no se admiten).', 'warn')
-  if (M.s.q.length >= L.LIMITS.queue) return toast(`La cola está llena (máximo ${L.LIMITS.queue} canciones).`, 'warn')
+  if (!text || ui.add.disabled) return
   ui.add.disabled = true
   try {
-    const meta = await window.humble.musicMeta(v)
-    if (!meta?.ok) return toast(meta?.reason === 'noembed' ? 'Su dueño no permite reproducir ese vídeo fuera de YouTube.' : 'Ese vídeo no existe o es privado.', 'warn')
-    if (!inCall()) return
-    const track = L.newTrack(v, meta, me())
-    M.mine.set(track.n, track)
-    setTimeout(() => M.mine.delete(track.n), MINE_MS)
-    ui.input.value = ''
-    act((s) => L.addTrack(s, track, me()), { listen: !L.current(M.s) || M.listening })
+    const v = L.parseYouTube(text)
+    const list = v ? null : L.parseYouTubeList(text)
+    if (v) {
+      if (await addVideo(v)) { ui.input.value = ''; closeResults() }
+    } else if (list) {
+      const r = await window.humble.musicPlaylist(list)
+      if (!r.ok) return toast(r.error, 'warn')
+      if (!inCall()) return
+      const tracks = r.items.map((x) => L.newTrack(x.v, { title: x.t, author: x.a }, me())).filter(Boolean)
+      tracks.forEach((t) => { M.mine.set(t.n, t); setTimeout(() => M.mine.delete(t.n), MINE_MS) })
+      let added = 0
+      act((s) => { const x = L.addTracks(s, tracks, me()); added = x.added; return x.state }, { listen: !L.current(M.s) || M.listening })
+      ui.input.value = ''
+      closeResults()
+      toast(added ? `Añadidas ${added} canciones de la lista${added < tracks.length ? ` (la cola admite ${L.LIMITS.queue})` : ''}.` : `La cola está llena (máximo ${L.LIMITS.queue} canciones).`, added ? 'info' : 'warn')
+    } else if (L.looksLikeLink(text)) {
+      toast('Ese enlace no es de un vídeo ni de una lista de YouTube.', 'warn')
+    } else {
+      const r = await window.humble.musicSearch(text)
+      if (!r.ok) return toast(r.error + '. Puedes pegar el enlace del vídeo.', 'warn')
+      found = { q: text, items: r.items, added: new Set() }
+      drawResults()
+    }
   } catch (e) {
     toast(e.message || 'No se pudo añadir la canción.', 'warn')
   } finally { ui.add.disabled = false }
+}
+
+function closeResults() { found = null; drawResults() }
+
+function drawResults() {
+  ui.results.classList.toggle('hidden', !found)
+  if (!found) return ui.results.replaceChildren()
+  ui.results.replaceChildren(
+    h('div.mu-qh', h('span', `Resultados de «${found.q}»`), h('button.mu-x.on', { tip: 'Cerrar los resultados', tipPos: 'left', onclick: closeResults }, icon('close', 16))),
+    ...found.items.map((it) => h('div.mu-q.res' + (found.added.has(it.v) ? '.added' : ''), {
+      dataset: { v: it.v },
+      onclick: async () => {
+        if (found.added.has(it.v)) return
+        found.added.add(it.v)
+        drawResults()
+        if (!(await addVideo(it.v, it))) { found?.added.delete(it.v); drawResults() }
+      }
+    },
+      h('span.mu-qi', found.added.has(it.v) ? icon('check', 16) : icon('add', 16)),
+      h('div.mu-qt', h('div.mu-qn', { title: it.t }, it.t), h('div.mu-qs', [it.a, it.d ? L.fmtTime(it.d) : 'en directo'].filter(Boolean).join(' · '))))))
 }
 
 // ───────────── Interfaz ─────────────
@@ -257,10 +304,11 @@ function drawQueue() {
 }
 
 function buildDock() {
-  ui.input = h('input.text', { placeholder: 'Enlace de YouTube', spellcheck: false, maxLength: 200, onkeydown: (e) => { if (e.key === 'Enter') addFromInput() } })
+  ui.input = h('input.text', { placeholder: 'Enlace de YouTube o nombre de la canción', spellcheck: false, maxLength: 200, onkeydown: (e) => { if (e.key === 'Enter') addFromInput() } })
   ui.add = h('button.btn.brand.small', { dataset: { mu: 'add' }, onclick: addFromInput }, 'Añadir')
   ui.now = h('div.mu-now')
   ui.err = h('div.mu-err.hidden')
+  ui.results = h('div.mu-results.hidden')
   ui.queue = h('div.mu-queue')
   ui.volText = h('span.mu-vt', String(volume))
   ui.vol = h('input.mu-vol', {
@@ -271,6 +319,7 @@ function buildDock() {
     h('div.mu-head', icon('music', 18), h('b', 'Escuchar juntos'), h('button.icon-btn', { tip: 'Cerrar', tipPos: 'left', onclick: toggleMusic }, icon('close', 20))),
     ui.now, ui.err,
     h('div.mu-add', ui.input, ui.add),
+    ui.results,
     ui.queue,
     h('div.mu-foot', icon('volume', 16), ui.vol, ui.volText),
     h('div.mu-note', 'Cada uno escucha su propia copia desde YouTube, sincronizada. Por la llamada no viaja audio de música.'))
@@ -284,6 +333,7 @@ function render() {
   ui.dock.classList.toggle('with-members', state.showMembers)
   drawNow()
   drawErr()
+  drawResults()
   drawQueue()
 }
 
@@ -297,7 +347,7 @@ export function mountMusic() {
   bus.on('toggleMembers', render)
   bus.on('voice', () => {
     if (!inCall()) { // colgar: se acaba la música (el proceso principal ya cierra el reproductor)
-      if (M.s.rev > 0 || M.listening || M.open) { M = fresh(); thumbs.clear(); ui.dock?.remove(); bus.emit('music') }
+      if (M.s.rev > 0 || M.listening || M.open) { M = fresh(); found = null; thumbs.clear(); ui.dock?.remove(); bus.emit('music') }
       return
     }
     const deaf = !!state.voice.deafened

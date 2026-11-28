@@ -727,3 +727,9 @@ h3.sub { margin: 28px 0 4px; font-size: 14px; color: var(--text-head); }
 .mu-vol { flex: 1; accent-color: var(--brand); }
 .mu-vt { width: 26px; text-align: right; font-size: 12px; }
 .mu-note { padding: 0 14px 10px; font-size: 11px; color: var(--text-muted); flex: none; }
+.mu-results { margin: 0 6px 6px; padding-bottom: 4px; border-radius: 8px; background: #232428; max-height: 240px; overflow-y: auto; flex: none; }
+.mu-qh { display: flex; align-items: center; justify-content: space-between; }
+.mu-x.on { opacity: 1; }
+.mu-q.res .mu-qi { color: var(--brand); }
+.mu-q.res.added { opacity: .55; cursor: default; }
+.mu-q.res.added .mu-qi { color: var(--green); }
